@@ -1,5 +1,6 @@
 import app as app_module
 from fastapi.testclient import TestClient
+from scanner import FileScanner
 
 
 def test_load_config_creates_default(tmp_path, monkeypatch):
@@ -17,9 +18,9 @@ def test_load_config_reads_existing(tmp_path, monkeypatch):
     assert app_module.load_config() == {"dirs": ["C:\\tmp\\a"]}
 
 
-def test_dirs_endpoint(tmp_path, monkeypatch):
-    monkeypatch.setattr(app_module, "CONFIG_PATH", tmp_path / "config.json")
+def test_dirs_endpoint(tmp_path):
+    app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
     r = client.get("/api/dirs")
     assert r.status_code == 200
-    assert r.json()["dirs"] == [r"D:\迅雷下载\other1"]
+    assert r.json()["dirs"] == [str(tmp_path)]
