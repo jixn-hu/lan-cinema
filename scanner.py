@@ -30,8 +30,8 @@ def detect_type(name: str) -> str:
     return "other"
 
 
-def file_id(rel_path: str) -> str:
-    return hashlib.sha1(rel_path.encode("utf-8")).hexdigest()[:16]
+def file_id(root: str, rel_path: str) -> str:
+    return hashlib.sha1(os.path.join(root, rel_path).encode("utf-8")).hexdigest()[:16]
 
 
 class FileScanner:
@@ -63,7 +63,7 @@ class FileScanner:
                     rel = os.path.relpath(full, root)
                     files.append(
                         FileInfo(
-                            id=file_id(rel),
+                            id=file_id(root, rel),
                             name=fname,
                             size=st.st_size,
                             mtime=st.st_mtime,

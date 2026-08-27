@@ -1,3 +1,5 @@
+import os
+
 import app as app_module
 import storage
 from fastapi.testclient import TestClient
@@ -81,7 +83,7 @@ def test_stream_video_range(tmp_path):
     (tmp_path / "v.mp4").write_bytes(b"0123456789")
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
-    fid = file_id("v.mp4")
+    fid = file_id(str(tmp_path), "v.mp4")
     r = client.get(f"/api/file/{fid}/stream", headers={"Range": "bytes=0-3"})
     assert r.status_code == 206
     assert r.content == b"0123"
@@ -92,7 +94,7 @@ def test_stream_full_video(tmp_path):
     (tmp_path / "v.mp4").write_bytes(b"0123456789")
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
-    fid = file_id("v.mp4")
+    fid = file_id(str(tmp_path), "v.mp4")
     r = client.get(f"/api/file/{fid}/stream")
     assert r.status_code == 200
     assert r.content == b"0123456789"
@@ -104,7 +106,7 @@ def test_stream_download_flag(tmp_path):
     (tmp_path / "v.mp4").write_bytes(b"0123456789")
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
-    fid = file_id("v.mp4")
+    fid = file_id(str(tmp_path), "v.mp4")
     r = client.get(f"/api/file/{fid}/stream", params={"download": "1"})
     assert r.status_code == 200
     assert "attachment" in r.headers["content-disposition"]
@@ -114,7 +116,7 @@ def test_stream_other_attachment(tmp_path):
     (tmp_path / "d.zip").write_bytes(b"x")
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
-    fid = file_id("d.zip")
+    fid = file_id(str(tmp_path), "d.zip")
     r = client.get(f"/api/file/{fid}/stream")
     assert "attachment" in r.headers["content-disposition"]
 
@@ -135,3 +137,86 @@ def test_progress_api(monkeypatch, tmp_path):
     assert client.get("/api/progress/x").json() == {"position": 42.5}
     client.put("/api/progress/x", json={"position": 0})
     assert client.get("/api/progress/x").json() == {"position": 0.0}
+
+
+def test_stream_cjk_filename_attachment(tmp_path):
+    (tmp_path / "中文文档.txt").write_bytes(b"abc")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "中文文档.txt")
+    r = client.get(f"/api/file/{fid}/stream")
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+    assert "filename" in r.headers["content-disposition"]  # RFC 5987 filename*= 或引号形式
+
+
+def test_stream_two_roots_no_collision(tmp_path):
+    r1 = tmp_path / "r1"; r2 = tmp_path / "r2"
+    r1.mkdir(); r2.mkdir()
+    (r1 / "same.mp4").write_bytes(b"AAAA")
+    (r2 / "same.mp4").write_bytes(b"BBBB")
+    app_module.scanner = FileScanner([str(r1), str(r2)])
+    client = TestClient(app_module.app)
+    data = client.get("/api/files").json()
+    assert len(data) == 2
+    assert data[0]["id"] != data[1]["id"]
+    f1 = client.get(f"/api/file/{data[0]['id']}/stream")
+    f2 = client.get(f"/api/file/{data[1]['id']}/stream")
+    assert (f1.content, f2.content) == (b"AAAA", b"BBBB")
+
+
+def test_files_search_empty_result(tmp_path):
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    assert client.get("/api/files", params={"search": "zzz"}).json() == []
+
+
+def test_files_type_video_and_image(tmp_path):
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    (tmp_path / "b.png").write_bytes(b"y")
+    (tmp_path / "c.txt").write_bytes(b"z")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    assert [f["name"] for f in client.get("/api/files", params={"type": "video"}).json()] == ["a.mp4"]
+    assert [f["name"] for f in client.get("/api/files", params={"type": "image"}).json()] == ["b.png"]
+
+
+def test_files_sort_mtime(tmp_path):
+    (tmp_path / "old.mp4").write_bytes(b"x")
+    (tmp_path / "new.mp4").write_bytes(b"y")
+    os.utime(tmp_path / "old.mp4", (1000000000, 1000000000))
+    os.utime(tmp_path / "new.mp4", (2000000000, 2000000000))
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    data = client.get("/api/files", params={"sort": "mtime", "order": "desc"}).json()
+    assert [f["name"] for f in data] == ["new.mp4", "old.mp4"]
+
+
+def test_stream_file_deleted_after_scan_404(tmp_path):
+    (tmp_path / "g.mp4").write_bytes(b"x")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "g.mp4")
+    assert client.get(f"/api/file/{fid}/stream").status_code == 200  # 入缓存
+    (tmp_path / "g.mp4").unlink()
+    assert client.get(f"/api/file/{fid}/stream").status_code == 404  # is_file() 兜底
+
+
+def test_stream_image_inline(tmp_path):
+    (tmp_path / "p.png").write_bytes(b"123")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "p.png")
+    r = client.get(f"/api/file/{fid}/stream")
+    assert "image/png" in r.headers["content-type"]
+    assert "content-disposition" not in r.headers
+
+
+def test_stream_fallback_media_rmvb(tmp_path):
+    (tmp_path / "v.rmvb").write_bytes(b"x")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "v.rmvb")
+    r = client.get(f"/api/file/{fid}/stream")
+    assert "video/mp4" in r.headers["content-type"]  # 类型兜底

@@ -140,7 +140,7 @@ createApp({
       ],
       player: { file: null, error: '' },
       lightbox: { show: false, src: '', hasPrev: false, hasNext: false },
-      saveTimer: null, _lbIndex: 0, _debounceTimer: null,
+      saveTimer: null, _lbIndex: 0, _debounceTimer: null, _loadSeq: 0,
     };
   },
   computed: {
@@ -160,15 +160,18 @@ createApp({
 
     async load() {
       this.loading = true;
+      const seq = ++this._loadSeq;
       try {
         const params = new URLSearchParams({ type: this.type, sort: this.sort, order: this.order });
         if (this.currentDir) params.set('dir', this.currentDir);
         if (this.search) params.set('search', this.search);
         const r = await fetch('/api/files?' + params);
-        this.files = await r.json();
+        const data = await r.json();
+        if (seq !== this._loadSeq) return;  // 丢弃过期响应
+        this.files = data;
         await this.loadProgresses();
       } finally {
-        this.loading = false;
+        if (seq === this._loadSeq) this.loading = false;
       }
     },
     async loadProgresses() {
@@ -215,6 +218,7 @@ createApp({
       if (!this.player.file || !this.$refs.video) return;
       const fid = this.player.file.id;  // 快照：closePlayer() 会同步置空 player.file
       const v = this.$refs.video;
+      if (!v.duration) return;  // 元数据未加载完，误保存 position=0 会清掉续播记录
       const watched = !!(v.duration && v.currentTime >= v.duration * 0.95);
       const pos = (clear || watched) ? 0 : (v.currentTime || 0);
       try {

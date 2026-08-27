@@ -11,8 +11,8 @@ def test_detect_type():
 
 
 def test_file_id_stable_and_short():
-    assert file_id("sub/a.mp4") == file_id("sub/a.mp4")
-    assert len(file_id("sub/a.mp4")) == 16
+    assert file_id("r1", "sub/a.mp4") == file_id("r1", "sub/a.mp4")
+    assert len(file_id("r1", "sub/a.mp4")) == 16
 
 
 def test_scan_recursive(tmp_path):

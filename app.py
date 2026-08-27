@@ -23,8 +23,16 @@ def load_config() -> dict:
             json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        return DEFAULT_CONFIG
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return dict(DEFAULT_CONFIG)
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[警告] config.json 解析失败（{e}），回退默认配置 {DEFAULT_CONFIG}")
+        return dict(DEFAULT_CONFIG)
+    if not isinstance(cfg.get("dirs"), list):
+        print(f"[警告] config.json 的 dirs 字段必须是列表，回退默认配置 {DEFAULT_CONFIG}")
+        return dict(DEFAULT_CONFIG)
+    return cfg
 
 
 app = FastAPI(title="文件浏览器")
@@ -48,7 +56,7 @@ def list_files(
     sort: str = Query("name"),
     order: str = Query("asc"),
 ):
-    files = scanner.scan()
+    files = list(scanner.scan())
     if dir:
         files = [f for f in files if f.dir == dir]
     if search:
@@ -79,8 +87,8 @@ def stream_file(file_id: str, download: bool = False):
         raise HTTPException(status_code=404, detail="文件不存在")
     headers = {}
     if download or target.type == "other":
-        headers["Content-Disposition"] = f'attachment; filename="{target.name}"'
-        return FileResponse(full_path, media_type="application/octet-stream", headers=headers)
+        # Starlette 的 filename= 会生成 RFC 5987 filename*=utf-8''... 且自动加 attachment
+        return FileResponse(full_path, media_type="application/octet-stream", filename=target.name)
     media_type = mimetypes.guess_type(target.name)[0] or _FALLBACK_MEDIA[target.type]
     return FileResponse(full_path, media_type=media_type, headers=headers)
 
@@ -100,4 +108,5 @@ def write_progress(file_id: str, body: ProgressBody):
     return {"ok": True}
 
 
+# 所有 API 路由必须先于此处注册，否则会被根挂载吞掉（Starlette 按注册顺序匹配）
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
