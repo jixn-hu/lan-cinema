@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 import app as app_module
 import storage
 from fastapi.testclient import TestClient
@@ -19,6 +21,20 @@ def test_load_config_reads_existing(tmp_path, monkeypatch):
     cfg_path.write_text('{"dirs": ["C:\\\\tmp\\\\a"]}', encoding="utf-8")
     monkeypatch.setattr(app_module, "CONFIG_PATH", cfg_path)
     assert app_module.load_config() == {"dirs": ["C:\\tmp\\a"]}
+
+
+@pytest.mark.parametrize("content", [
+    "{bad json",                    # JSONDecodeError
+    '{"dirs": "C:\\\\x"}',          # dirs 非列表
+    "[]",                           # 顶层非对象
+    "42",
+    "null",
+])
+def test_load_config_falls_back_on_bad_config(tmp_path, monkeypatch, content):
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(app_module, "CONFIG_PATH", cfg_path)
+    assert app_module.load_config() == app_module.DEFAULT_CONFIG
 
 
 def test_dirs_endpoint(tmp_path):

@@ -29,8 +29,8 @@ def load_config() -> dict:
     except json.JSONDecodeError as e:
         print(f"[警告] config.json 解析失败（{e}），回退默认配置 {DEFAULT_CONFIG}")
         return dict(DEFAULT_CONFIG)
-    if not isinstance(cfg.get("dirs"), list):
-        print(f"[警告] config.json 的 dirs 字段必须是列表，回退默认配置 {DEFAULT_CONFIG}")
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("dirs"), list):
+        print(f"[警告] config.json 格式无效，回退默认配置 {DEFAULT_CONFIG}")
         return dict(DEFAULT_CONFIG)
     return cfg
 
