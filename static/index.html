@@ -193,7 +193,6 @@ createApp({
 
     // ---- 播放器 ----
     openVideo(f) {
-      this.saveProgress();  // 先保存上一个文件
       this.player = { file: f, error: '' };
     },
     initVideo(f) {
@@ -214,17 +213,18 @@ createApp({
     onEnded() { this.saveProgress(true); },
     async saveProgress(clear) {
       if (!this.player.file || !this.$refs.video) return;
+      const fid = this.player.file.id;  // 快照：closePlayer() 会同步置空 player.file
       const v = this.$refs.video;
       const watched = !!(v.duration && v.currentTime >= v.duration * 0.95);
       const pos = (clear || watched) ? 0 : (v.currentTime || 0);
       try {
-        await fetch('/api/progress/' + this.player.file.id, {
+        await fetch('/api/progress/' + fid, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ position: pos }),
         });
-        if (pos <= 0) delete this.progressMap[this.player.file.id];
-        else this.progressMap[this.player.file.id] = pos;
+        if (pos <= 0) delete this.progressMap[fid];
+        else this.progressMap[fid] = pos;
       } catch (e) { /* 静默失败，不打断播放 */ }
     },
     closePlayer() {
