@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from scanner import FileScanner
+
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
 
@@ -23,10 +25,12 @@ def load_config() -> dict:
 
 app = FastAPI(title="文件浏览器")
 
+scanner = FileScanner(load_config().get("dirs", []))
+
 
 @app.get("/api/dirs")
 def list_dirs():
-    return {"dirs": load_config().get("dirs", [])}
+    return {"dirs": scanner.dirs}
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
