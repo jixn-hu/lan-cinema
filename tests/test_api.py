@@ -24,3 +24,53 @@ def test_dirs_endpoint(tmp_path):
     r = client.get("/api/dirs")
     assert r.status_code == 200
     assert r.json()["dirs"] == [str(tmp_path)]
+
+
+def _setup_scanner(tmp_path):
+    (tmp_path / "movie.mp4").write_bytes(b"x" * 1000)
+    (tmp_path / "photo.png").write_bytes(b"y" * 2000)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "Doc.txt").write_bytes(b"z")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    return TestClient(app_module.app)
+
+
+def test_files_default_video_image_mixed(tmp_path):
+    client = _setup_scanner(tmp_path)
+    r = client.get("/api/files")
+    assert r.status_code == 200
+    data = r.json()
+    assert {f["name"] for f in data} == {"movie.mp4", "photo.png"}  # Doc.txt 被排除
+    assert [f["name"] for f in data] == ["movie.mp4", "photo.png"]  # 默认名称升序
+
+
+def test_files_type_other(tmp_path):
+    client = _setup_scanner(tmp_path)
+    data = client.get("/api/files", params={"type": "other"}).json()
+    assert [f["name"] for f in data] == ["Doc.txt"]
+    assert data[0]["path"].endswith("Doc.txt")  # 含子文件夹的相对路径
+
+
+def test_files_search_case_insensitive(tmp_path):
+    client = _setup_scanner(tmp_path)
+    data = client.get("/api/files", params={"search": "MOVIE"}).json()
+    assert [f["name"] for f in data] == ["movie.mp4"]
+
+
+def test_files_sort_size_desc(tmp_path):
+    client = _setup_scanner(tmp_path)
+    data = client.get("/api/files", params={"sort": "size", "order": "desc"}).json()
+    assert data[0]["name"] == "photo.png"
+    assert data[1]["name"] == "movie.mp4"
+
+
+def test_files_filter_dir(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "alone.mp4").write_bytes(b"q")
+    client = _setup_scanner(tmp_path)
+    # 修正计划原文：dir 按「配置根目录」精确匹配（scanner 的 dir 字段=根目录），
+    # 故把 other 也加为根目录，否则过滤结果为空
+    app_module.scanner = FileScanner([str(tmp_path), str(other)])
+    data = client.get("/api/files", params={"dir": str(other)}).json()
+    assert [f["name"] for f in data] == ["alone.mp4"]
