@@ -1,8 +1,10 @@
 """局域网文件浏览器后端：REST API + 静态页面托管。"""
 import json
+import mimetypes
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from scanner import FileScanner
@@ -60,6 +62,25 @@ def list_files(
          "type": f.type, "dir": f.dir, "path": f.path}
         for f in files
     ]
+
+
+_FALLBACK_MEDIA = {"video": "video/mp4", "image": "image/jpeg", "other": "application/octet-stream"}
+
+
+@app.get("/api/file/{file_id}/stream")
+def stream_file(file_id: str, download: bool = False):
+    target = next((f for f in scanner.scan() if f.id == file_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    full_path = Path(target.dir) / target.path
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    headers = {}
+    if download or target.type == "other":
+        headers["Content-Disposition"] = f'attachment; filename="{target.name}"'
+        return FileResponse(full_path, media_type="application/octet-stream", headers=headers)
+    media_type = mimetypes.guess_type(target.name)[0] or _FALLBACK_MEDIA[target.type]
+    return FileResponse(full_path, media_type=media_type, headers=headers)
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")

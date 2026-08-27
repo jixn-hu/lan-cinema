@@ -1,6 +1,6 @@
 import app as app_module
 from fastapi.testclient import TestClient
-from scanner import FileScanner
+from scanner import FileScanner, file_id
 
 
 def test_load_config_creates_default(tmp_path, monkeypatch):
@@ -74,3 +74,51 @@ def test_files_filter_dir(tmp_path):
     app_module.scanner = FileScanner([str(tmp_path), str(other)])
     data = client.get("/api/files", params={"dir": str(other)}).json()
     assert [f["name"] for f in data] == ["alone.mp4"]
+
+
+def test_stream_video_range(tmp_path):
+    (tmp_path / "v.mp4").write_bytes(b"0123456789")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id("v.mp4")
+    r = client.get(f"/api/file/{fid}/stream", headers={"Range": "bytes=0-3"})
+    assert r.status_code == 206
+    assert r.content == b"0123"
+    assert r.headers["content-range"] == "bytes 0-3/10"
+
+
+def test_stream_full_video(tmp_path):
+    (tmp_path / "v.mp4").write_bytes(b"0123456789")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id("v.mp4")
+    r = client.get(f"/api/file/{fid}/stream")
+    assert r.status_code == 200
+    assert r.content == b"0123456789"
+    assert "video/mp4" in r.headers["content-type"]
+    assert "content-disposition" not in r.headers  # 内嵌播放，不能是 attachment
+
+
+def test_stream_download_flag(tmp_path):
+    (tmp_path / "v.mp4").write_bytes(b"0123456789")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id("v.mp4")
+    r = client.get(f"/api/file/{fid}/stream", params={"download": "1"})
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+
+
+def test_stream_other_attachment(tmp_path):
+    (tmp_path / "d.zip").write_bytes(b"x")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id("d.zip")
+    r = client.get(f"/api/file/{fid}/stream")
+    assert "attachment" in r.headers["content-disposition"]
+
+
+def test_stream_404(tmp_path):
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    assert client.get("/api/file/doesnotexist/stream").status_code == 404
