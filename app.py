@@ -6,8 +6,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from scanner import FileScanner
+from storage import get_progress, save_progress
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -81,6 +83,21 @@ def stream_file(file_id: str, download: bool = False):
         return FileResponse(full_path, media_type="application/octet-stream", headers=headers)
     media_type = mimetypes.guess_type(target.name)[0] or _FALLBACK_MEDIA[target.type]
     return FileResponse(full_path, media_type=media_type, headers=headers)
+
+
+class ProgressBody(BaseModel):
+    position: float
+
+
+@app.get("/api/progress/{file_id}")
+def read_progress(file_id: str):
+    return {"position": get_progress(file_id)}
+
+
+@app.put("/api/progress/{file_id}")
+def write_progress(file_id: str, body: ProgressBody):
+    save_progress(file_id, body.position)
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")

@@ -1,4 +1,5 @@
 import app as app_module
+import storage
 from fastapi.testclient import TestClient
 from scanner import FileScanner, file_id
 
@@ -122,3 +123,15 @@ def test_stream_404(tmp_path):
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
     assert client.get("/api/file/doesnotexist/stream").status_code == 404
+
+
+def test_progress_api(monkeypatch, tmp_path):
+    monkeypatch.setattr(storage, "DB_PATH", tmp_path / "p.db")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    assert client.get("/api/progress/x").json() == {"position": 0.0}
+    r = client.put("/api/progress/x", json={"position": 42.5})
+    assert r.status_code == 200
+    assert client.get("/api/progress/x").json() == {"position": 42.5}
+    client.put("/api/progress/x", json={"position": 0})
+    assert client.get("/api/progress/x").json() == {"position": 0.0}
