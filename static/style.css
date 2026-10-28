@@ -735,6 +735,69 @@ h1 {
   height: 4px;
   margin-top: 12px;
 }
+.file-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.download-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 24px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.delete-mask {
+  z-index: 80;
+}
+.delete-dialog {
+  z-index: 81;
+}
+.delete-filename {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-weight: 600;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+.episode-list {
+  display: grid;
+  gap: 6px;
+  padding: 16px 22px;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+.episode-list button {
+  text-align: left;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.episode-list button span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.episode-list button.active {
+  color: var(--accent);
+  background: #c9f59118;
+  border-color: #c9f59155;
+}
+.cinema-toolbar {
+  flex-wrap: wrap;
+}
 .mobile-devices,
 .mobile-settings {
   display: none;

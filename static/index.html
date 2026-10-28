@@ -146,7 +146,14 @@
                 <option value="mtime_desc">最近更新</option>
                 <option value="name_asc">文件名称</option>
                 <option value="size_desc">文件大小</option></select
-              ><button title="刷新文件" @click="load(true)">↻</button>
+              ><button
+                title="刷新文件"
+                aria-label="刷新文件"
+                :disabled="loading"
+                @click="load(true)"
+              >
+                ↻
+              </button>
             </div>
           </div>
           <div class="library-summary">
@@ -215,13 +222,22 @@
                     ↓
                   </button>
                 </div>
-                <button
-                  v-if="native&&!source"
-                  class="unshare"
-                  @click="unshare(f)"
-                >
-                  停止共享
-                </button>
+                <div class="file-actions">
+                  <button
+                    v-if="native&&!source"
+                    class="unshare"
+                    @click="unshare(f)"
+                  >
+                    停止共享
+                  </button>
+                  <button
+                    class="unshare danger"
+                    :aria-label="'删除 '+f.name"
+                    @click="askDelete(f)"
+                  >
+                    删除原文件
+                  </button>
+                </div>
               </div>
             </article>
           </div>
@@ -235,12 +251,36 @@
             </div>
             <button @click="clearCache">清理临时缓存</button>
           </div>
+          <div class="download-controls">
+            <span
+              >{{ downloads.length }} 个下载与缓存 · {{
+              downloads.filter(d=>d.complete).length }} 个已下载</span
+            >
+            <select
+              aria-label="下载与缓存排序"
+              v-model="downloadSort"
+              @change="saveDownloadSort"
+            >
+              <option value="added_desc">最近添加</option>
+              <option value="name_asc">名称顺序</option>
+              <option value="progress_desc">缓存比例从高到低</option>
+              <option value="progress_asc">缓存比例从低到高</option>
+              <option value="size_desc">文件从大到小</option>
+              <option value="status_asc">未完成优先</option>
+            </select>
+          </div>
           <div v-if="!downloads.length" class="empty">
             <span>↓</span>
             <h2>下一次，没有网络也能看。</h2>
-            <p>点击文件上的下载按钮，完整保存在这台手机。</p>
+            <p>
+              播放缓存会显示在这里，也可点击下载补全。全部缓存完成后自动保留为已下载。
+            </p>
           </div>
-          <article v-for="d in downloads" :key="d.id" class="download-row">
+          <article
+            v-for="d in sortedDownloads"
+            :key="d.id"
+            class="download-row"
+          >
             <span class="download-icon">▷</span>
             <div>
               <h3>{{ d.name }}</h3>
@@ -265,10 +305,12 @@
             ><button v-if="d.complete" @click="exportDownload(d)">
               导出文件</button
             ><button
-              v-if="!d.complete"
+              v-if="!d.complete&&!d.temporary"
               @click="downloadAction(d,d.paused?'resume':'pause')"
             >
               {{ d.paused?'继续':'暂停' }}</button
+            ><button v-if="d.temporary" @click="downloadAction(d,'resume')">
+              下载剩余部分</button
             ><button class="danger" @click="downloadAction(d,'remove')">
               移除
             </button>
@@ -330,6 +372,25 @@
             /><button class="primary" :disabled="connecting">连接</button>
           </form>
           <p v-if="discoveryError" class="subtle">{{ discoveryError }}</p>
+          <h3>文件列表刷新</h3>
+          <p>
+            返回 App
+            保留当前列表。外部新增或修改文件时，可手动刷新，或设置自动刷新间隔。
+          </p>
+          <select
+            aria-label="自动刷新间隔"
+            v-model.number="refreshInterval"
+            @change="saveRefreshInterval"
+          >
+            <option :value="0">手动刷新</option>
+            <option :value="60">每 1 分钟</option>
+            <option :value="180">每 3 分钟</option>
+            <option :value="300">每 5 分钟</option>
+            <option :value="600">每 10 分钟</option>
+          </select>
+          <p class="subtle">
+            设备间删除、停止共享等变更会自动同步，不会反复扫描目录。
+          </p>
           <h3>本机共享地址</h3>
           <p v-for="url in accessUrls" :key="url" class="address">{{ url }}</p>
           <button v-if="!native" @click="settings=false;showDirManager=true">
@@ -370,6 +431,43 @@
           >
         </section></template
       >
+      <template v-if="deleteTarget">
+        <div
+          class="mask delete-mask"
+          @click="!deleting&&(deleteTarget=null)"
+        ></div>
+        <section
+          class="dialog delete-dialog"
+          role="dialog"
+          aria-label="确认删除原文件"
+          aria-modal="true"
+        >
+          <div class="dialog-head">
+            <h2>删除原文件？</h2>
+            <button
+              :disabled="deleting"
+              aria-label="取消删除"
+              @click="deleteTarget=null"
+            >
+              ×
+            </button>
+          </div>
+          <p>
+            将从「{{ deleteTarget.device
+            }}」永久删除以下文件，所有设备的共享列表都会更新。
+          </p>
+          <p class="delete-filename">{{ deleteTarget.file.name }}</p>
+          <p class="subtle">
+            {{ fmtSize(deleteTarget.file.size) }} · 此操作无法撤销
+          </p>
+          <div class="delete-actions">
+            <button :disabled="deleting" @click="deleteTarget=null">取消</button
+            ><button class="danger" :disabled="deleting" @click="confirmDelete">
+              {{ deleting?'正在删除…':'确认删除原文件' }}
+            </button>
+          </div>
+        </section>
+      </template>
       <template v-if="player.file"
         ><div class="mask" @click="closePlayer"></div>
         <section
@@ -455,6 +553,13 @@
                 <div class="cinema-toolbar">
                   <button aria-label="快退10秒" @click="seek(-10)">−10s</button
                   ><button aria-label="快进10秒" @click="seek(10)">+10s</button>
+                  <button
+                    :disabled="episodeIndex+1>=playQueue.length"
+                    @click="playEpisode(episodeIndex+1)"
+                  >
+                    下一集
+                  </button>
+                  <button @click="playlistOpen=!playlistOpen">选集</button>
                   <span class="cinema-time"
                     >{{ videoTime(player.current) }}
                     <em>/ {{ videoTime(player.duration) }}</em></span
@@ -475,6 +580,15 @@
             </div>
           </div>
           <div class="player-controls">
+            <button
+              :disabled="episodeIndex+1>=playQueue.length"
+              @click="playEpisode(episodeIndex+1)"
+            >
+              下一集
+            </button>
+            <button @click="playlistOpen=!playlistOpen">
+              播放列表 {{ episodeIndex+1 }}/{{ playQueue.length }}
+            </button>
             <button @click="seek(-10)">−10 秒</button
             ><button @click="seek(10)">+10 秒</button
             ><select
@@ -495,6 +609,22 @@
               {{ player.expanded?'收起':'展开' }}</button
             ><button @click="fullscreen">全屏</button
             ><button @click="download(player.file,player.source)">下载</button>
+          </div>
+          <div
+            v-if="playlistOpen"
+            class="episode-list"
+            role="navigation"
+            aria-label="播放列表"
+          >
+            <button
+              v-for="(episode,i) in playQueue"
+              :key="episode.id"
+              :class="{active:i===episodeIndex}"
+              :aria-current="i===episodeIndex?'true':undefined"
+              @click="playEpisode(i)"
+            >
+              <span>{{ String(i+1).padStart(2,'0') }}</span>{{ episode.name }}
+            </button>
           </div>
           <div class="pd-body">
             <p v-if="player.error" class="error">{{ player.error }}</p>

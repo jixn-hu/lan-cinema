@@ -32,6 +32,16 @@ createApp({
       cache: {},
       cacheLimit: 20,
       downloads: [],
+      downloadSort: localStorage.getItem("lan-download-sort") || "added_desc",
+      refreshInterval: Number(localStorage.getItem("lan-refresh-seconds")) || 0,
+      lastRefresh: 0,
+      libraryRevision: "",
+      checkingChanges: false,
+      deleteTarget: null,
+      deleting: false,
+      playQueue: [],
+      queueSource: null,
+      playlistOpen: false,
       tabs: [
         { value: "all", label: "全部" },
         { value: "video", label: "视频" },
@@ -75,6 +85,36 @@ createApp({
     };
   },
   computed: {
+    sortedDownloads() {
+      const [key, direction] = this.downloadSort.split("_");
+      const value = (d) =>
+        key === "progress"
+          ? d.total > 0
+            ? d.bytes / d.total
+            : -1
+          : key === "size"
+            ? d.total
+            : key === "status"
+              ? d.complete
+                ? 2
+                : d.temporary
+                  ? 1
+                  : 0
+              : d[key] || 0;
+      return [...this.downloads].sort((a, b) => {
+        const comparison =
+          key === "name"
+            ? a.name.localeCompare(b.name, "zh-CN", { numeric: true })
+            : value(a) - value(b);
+        return (
+          comparison * (direction === "asc" ? 1 : -1) ||
+          a.id.localeCompare(b.id)
+        );
+      });
+    },
+    episodeIndex() {
+      return this.playQueue.findIndex((f) => f.id === this.player.file?.id);
+    },
     lockDescription() {
       return this.cache.lockEnabled
         ? "已启用。重新打开或离开 App 超过 30 秒后需要解锁。"
@@ -121,7 +161,10 @@ createApp({
               `连接失败（${response.status}），请检查设备地址或访问令牌`,
           );
         }
-        return await response.json();
+        const data = await response.json();
+        if (Array.isArray(data))
+          data.libraryRevision = response.headers.get("X-Library-Revision");
+        return data;
       } catch (error) {
         const address = new URL(url).origin;
         if (controller.signal.aborted)
@@ -173,6 +216,7 @@ createApp({
     async selectDevice(d) {
       this.closePlayer();
       this.source = d;
+      this.libraryRevision = "";
       this.view = "library";
       this.currentDir = "";
       this.coverFailed = {};
@@ -183,7 +227,9 @@ createApp({
       await this.load();
     },
     async load(refresh = false) {
+      refresh = refresh === true;
       const seq = ++this.loadSeq;
+      const source = this.source;
       this.loading = true;
       this.error = "";
       const [sort, order] = this.sortKey.split("_");
@@ -192,10 +238,14 @@ createApp({
       if (this.search) q.set("search", this.search);
       if (refresh) q.set("refresh", "true");
       try {
-        const data = await this.request("/api/files?" + q);
+        const data = await this.request("/api/files?" + q, {}, source);
         if (seq !== this.loadSeq) return;
         this.files = data;
-        const p = await this.request("/api/progress").catch(() => ({}));
+        this.libraryRevision = data.libraryRevision || "";
+        this.lastRefresh = Date.now();
+        const p = await this.request("/api/progress", {}, source).catch(
+          () => ({}),
+        );
         if (seq === this.loadSeq) this.progressMap = p;
       } catch (e) {
         if (seq === this.loadSeq) {
@@ -204,6 +254,73 @@ createApp({
         }
       } finally {
         if (seq === this.loadSeq) this.loading = false;
+      }
+    },
+    saveRefreshInterval() {
+      localStorage.setItem("lan-refresh-seconds", String(this.refreshInterval));
+      this.lastRefresh = Date.now();
+      this.notify(
+        this.refreshInterval
+          ? `已设置每 ${this.refreshInterval} 秒刷新文件列表`
+          : "已设为手动刷新文件列表",
+      );
+    },
+    async checkLibrary() {
+      if (this.checkingChanges || this.loading || document.hidden) return;
+      this.checkingChanges = true;
+      const source = this.source;
+      try {
+        const change = await this.request("/api/changes", {}, source);
+        if (source !== this.source) return;
+        if (this.libraryRevision && change.revision !== this.libraryRevision)
+          await this.load();
+        else this.libraryRevision = change.revision;
+      } catch {
+      } finally {
+        this.checkingChanges = false;
+      }
+    },
+    askDelete(f) {
+      this.deleteTarget = {
+        file: f,
+        source: this.source,
+        device: this.source?.name || this.self.name || "本机",
+      };
+    },
+    async confirmDelete() {
+      const target = this.deleteTarget;
+      if (!target || this.deleting) return;
+      this.deleting = true;
+      try {
+        await this.request(
+          "/api/file/" + target.file.id,
+          {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              size: target.file.size,
+              mtime: target.file.mtime,
+            }),
+          },
+          target.source,
+        );
+        if (
+          this.player.file?.id === target.file.id &&
+          this.player.source === target.source
+        )
+          this.closePlayer();
+        this.playQueue = this.playQueue.filter((f) => f.id !== target.file.id);
+        this.deleteTarget = null;
+        if (this.source === target.source) await this.load();
+        this.notify(
+          "已从「" +
+            target.device +
+            "」删除原文件，其他设备的文件列表会同步更新",
+        );
+      } catch (e) {
+        this.notify(e.message);
+      } finally {
+        this.deleting = false;
       }
     },
     debouncedLoad() {
@@ -342,24 +459,43 @@ createApp({
         a.remove();
       }
     },
-    openItem(f) {
+    videoInfo(f, source = this.source) {
+      return {
+        url: this.mediaURL(f, source),
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        position: this.progressMap[f.id] || 0,
+        progressUrl: this.apiURL("/api/progress/" + f.id, source),
+      };
+    },
+    openItem(f, keepQueue = false) {
       if (f.type === "video") {
+        if (!keepQueue) {
+          this.queueSource = this.source;
+          this.playQueue = this.files
+            .filter((x) => x.type === "video")
+            .sort((a, b) =>
+              a.name.localeCompare(b.name, "zh-CN", { numeric: true }),
+            );
+        }
         if (this.native) {
           window.LanCinema.play(
             JSON.stringify({
-              url: this.mediaURL(f),
-              name: f.name,
-              position: this.progressMap[f.id] || 0,
-              progressUrl: this.apiURL("/api/progress/" + f.id),
+              ...this.videoInfo(f, this.queueSource),
+              playlist: this.playQueue.map((x) =>
+                this.videoInfo(x, this.queueSource),
+              ),
             }),
           );
           return;
         }
+        const rate = keepQueue ? this.player.rate : 1;
         this.closePlayer();
         this.player = {
           file: f,
-          source: this.source,
-          rate: 1,
+          source: this.queueSource,
+          rate,
           zoom: 1,
           seekPreview: null,
           x: 0,
@@ -379,6 +515,13 @@ createApp({
       } else if (f.type === "image") this.lightbox = this.mediaURL(f);
       else this.download(f);
     },
+    playEpisode(index) {
+      const f = this.playQueue[index];
+      if (f) {
+        this.playlistOpen = false;
+        this.openItem(f, true);
+      }
+    },
     initVideo(f) {
       const v = this.$refs.video;
       v.src = this.mediaURL(f, this.player.source);
@@ -387,14 +530,11 @@ createApp({
       v.onerror = () =>
         (this.player.error =
           "这个视频的编码可能不被浏览器支持，可使用安卓 App 或下载后播放。");
-      v.addEventListener(
-        "loadedmetadata",
-        () => {
-          const pos = this.progressMap[f.id] || 0;
-          if (pos > 0 && pos < v.duration) v.currentTime = pos;
-        },
-        { once: true },
-      );
+      v.onloadedmetadata = () => {
+        const pos = this.progressMap[f.id] || 0;
+        if (pos > 0 && pos < v.duration) v.currentTime = pos;
+      };
+      v.playbackRate = this.player.rate;
       this.saveTimer = setInterval(() => this.saveProgress(), 5000);
       v.play().catch(() => {});
     },
@@ -426,6 +566,8 @@ createApp({
       const v = this.$refs.video;
       if (v) {
         v.pause();
+        v.onloadedmetadata = null;
+        v.onerror = null;
         v.removeAttribute("src");
         v.load();
       }
@@ -449,6 +591,7 @@ createApp({
     },
     onEnded() {
       this.saveProgress(true);
+      this.playEpisode(this.episodeIndex + 1);
     },
     seek(n) {
       const v = this.$refs.video;
@@ -689,6 +832,9 @@ createApp({
     downloadSpeedLabel(d) {
       return d.speed > 0 ? this.fmtSize(d.speed) + "/s" : "等待数据…";
     },
+    saveDownloadSort() {
+      localStorage.setItem("lan-download-sort", this.downloadSort);
+    },
     refreshNative() {
       if (!this.native) return;
       try {
@@ -725,12 +871,22 @@ createApp({
       window.LanCinema.manageLock();
     },
     playDownload(d) {
+      const queue = this.sortedDownloads.filter(
+        (x) => !x.type || x.type === "video",
+      );
+      const info = (x) => ({
+        url: x.url,
+        name: x.name,
+        size: x.total,
+        type: x.type,
+        position: 0,
+        offline: x.complete,
+        progressUrl: x.progressUrl,
+      });
       window.LanCinema.play(
         JSON.stringify({
-          url: d.url,
-          name: d.name,
-          position: 0,
-          offline: d.complete,
+          ...info(d),
+          playlist: queue.map(info),
         }),
       );
     },
@@ -745,6 +901,7 @@ createApp({
   async mounted() {
     window.lanBack = () => {
       if (
+        this.deleteTarget ||
         this.player.file ||
         this.lightbox ||
         this.settings ||
@@ -754,6 +911,7 @@ createApp({
         this.lightbox = "";
         this.settings = false;
         this.showDirManager = false;
+        if (!this.deleting) this.deleteTarget = null;
         return true;
       }
       if (this.view !== "library") {
@@ -772,6 +930,13 @@ createApp({
       this.load(true);
       this.refreshNative();
     });
+    window.addEventListener("lanresume", () => {
+      this.refreshNative();
+      this.checkLibrary();
+      this.request("/api/progress")
+        .then((p) => (this.progressMap = p))
+        .catch(() => {});
+    });
     window.addEventListener("pagehide", () => this.saveProgress());
     this.request("/api/device", {}, null)
       .then((d) => (this.self = d))
@@ -788,8 +953,20 @@ createApp({
     this.discover();
     this.refreshNative();
     this.pollTimer = setInterval(() => {
-      this.discover();
-    }, 4000);
+      if (document.hidden) return;
+      if (
+        Date.now() - this.lastRefresh >= this.refreshInterval * 1000 &&
+        this.refreshInterval > 0 &&
+        this.view === "library" &&
+        !this.player.file &&
+        !this.loading
+      )
+        this.load(true);
+      else this.checkLibrary();
+    }, 15000);
+    this.discoveryTimer = setInterval(() => {
+      if (!document.hidden) this.discover();
+    }, 30000);
     this.downloadsTimer = setInterval(() => {
       if (this.view === "downloads") this.refreshNative();
     }, 1000);
@@ -797,6 +974,7 @@ createApp({
   },
   beforeUnmount() {
     clearInterval(this.pollTimer);
+    clearInterval(this.discoveryTimer);
     clearInterval(this.downloadsTimer);
     this.closePlayer();
     window.removeEventListener("keydown", this.key);

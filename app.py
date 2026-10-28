@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -53,9 +53,9 @@ async def lifespan(application):
 
 
 app = FastAPI(title="局域影库", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "PUT", "OPTIONS"],
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "HEAD", "PUT", "DELETE", "OPTIONS"],
                    allow_headers=["Range", "Content-Type", "If-Range"],
-                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "ETag", "Last-Modified"])
+                   expose_headers=["Accept-Ranges", "Content-Range", "Content-Length", "ETag", "Last-Modified", "X-Library-Revision"])
 
 scanner = FileScanner(load_config().get("dirs", []))
 
@@ -91,7 +91,13 @@ def access_urls(request: Request):
 @app.get("/api/device")
 def device_info():
     return {"id": DEVICE_ID, "name": socket.gethostname(), "platform": "desktop", "version": 1,
-            "features": ["range", "progress", "download", "discovery"]}
+            "features": ["range", "progress", "download", "discovery", "delete", "changes"]}
+
+
+@app.get("/api/changes")
+def library_changes():
+    # Checking for another device's edits must never walk the media directories.
+    return {"revision": scanner.revision}
 
 
 @app.get("/api/devices")
@@ -132,6 +138,7 @@ _SORT_KEYS = {"name": lambda f: f.name.lower(), "size": lambda f: f.size, "mtime
 
 @app.get("/api/files")
 def list_files(
+    response: Response,
     dir: str | None = Query(None),
     search: str | None = Query(None),
     type: str = Query("all"),
@@ -152,6 +159,7 @@ def list_files(
     elif type in ("video", "image", "other"):
         files = [f for f in files if f.type == type]
     files.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["name"]), reverse=(order == "desc"))
+    response.headers["X-Library-Revision"] = scanner.revision
     return [
         {"id": f.id, "name": f.name, "size": f.size, "mtime": f.mtime,
          "type": f.type, "dir": f.dir, "path": f.path}
@@ -170,6 +178,29 @@ def _find_file(file_id: str):
     if not full_path.is_relative_to(Path(target.dir).resolve()) or not full_path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return target, full_path
+
+
+class DeleteFileBody(BaseModel):
+    size: int = Field(ge=0)
+    mtime: float = Field(ge=0, allow_inf_nan=False)
+
+
+@app.delete("/api/file/{file_id}")
+def delete_file(file_id: str, body: DeleteFileBody):
+    target, full_path = _find_file(file_id)
+    stat = full_path.stat()
+    if stat.st_size != body.size or stat.st_mtime != body.mtime:
+        raise HTTPException(status_code=409, detail="源文件已修改，请刷新后确认删除")
+    try:
+        # Unlink the advertised entry, not the resolved target of an in-root symlink.
+        (Path(target.dir) / target.path).unlink()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="源设备不允许删除该文件，请检查文件权限或是否正被占用")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="文件已删除")
+    scanner.discard(file_id)
+    save_progress(file_id, 0)
+    return {"ok": True, "revision": scanner.revision}
 
 
 def _file_response(path: Path, **kwargs) -> FileResponse:

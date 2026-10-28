@@ -70,7 +70,7 @@ public final class MainActivity extends Activity {
     } else {
       web.setVisibility(View.VISIBLE);
       web.onResume();
-      changed();
+      web.evaluateJavascript("window.dispatchEvent(new Event('lanresume'))", null);
     }
   }
 
@@ -109,6 +109,7 @@ public final class MainActivity extends Activity {
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
             startActivityForResult(intent, 11);
           });
@@ -130,10 +131,17 @@ public final class MainActivity extends Activity {
       try {
         JSONObject data = new JSONObject(json);
         validateURL(data.getString("url"));
+        org.json.JSONArray queue = data.optJSONArray("playlist");
+        if (queue != null)
+          for (int i = 0; i < queue.length(); i++)
+            validateURL(queue.getJSONObject(i).getString("url"));
+        app.playlist = queue;
+        data.remove("playlist");
+        String video = data.toString();
         runOnUiThread(
             () ->
                 startActivity(
-                    new Intent(MainActivity.this, PlayerActivity.class).putExtra("video", json)));
+                    new Intent(MainActivity.this, PlayerActivity.class).putExtra("video", video)));
       } catch (Exception e) {
         toast("视频地址无效");
       }
@@ -198,11 +206,13 @@ public final class MainActivity extends Activity {
       try {
         androidx.media3.exoplayer.offline.Download d =
             app.media().downloads.getDownloadIndex().getDownload(id);
-        if (d == null || d.state != androidx.media3.exoplayer.offline.Download.STATE_COMPLETED)
-          return;
-        String name =
-            new JSONObject(new String(d.request.data, java.nio.charset.StandardCharsets.UTF_8))
-                .optString("name", "video.mp4");
+        JSONObject info =
+            d == null
+                ? app.media().tracked.get(id)
+                : new JSONObject(
+                    new String(d.request.data, java.nio.charset.StandardCharsets.UTF_8));
+        if (info == null || !app.media().complete(id, app.media().length(id, info))) return;
+        String name = info.optString("name", "video.mp4");
         runOnUiThread(
             () -> {
               pendingExport = id;
@@ -244,7 +254,7 @@ public final class MainActivity extends Activity {
           int count = 0;
           for (Uri uri : uris)
             try {
-              app.shares.add(uri);
+              app.shares.add(uri, data.getFlags());
               count++;
             } catch (Exception e) {
               toast("无法共享：" + e.getMessage());

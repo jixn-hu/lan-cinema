@@ -28,13 +28,17 @@
   </LinearLayout>
   <androidx.media3.ui.DefaultTimeBar android:id="@+id/player_timeline" android:layout_width="match_parent" android:layout_height="40dp" android:contentDescription="@string/player_timeline"
    app:bar_height="3dp" app:played_color="#C9F591" app:scrubber_color="#C9F591" app:buffered_color="#88FFFFFF" app:unplayed_color="#33FFFFFF" app:scrubber_enabled_size="10dp" app:scrubber_dragged_size="16dp" />
-  <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical">
+  <HorizontalScrollView android:layout_width="match_parent" android:layout_height="48dp" android:fillViewport="true" android:scrollbars="none">
+  <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent" android:gravity="center_vertical">
    <TextView android:id="@+id/player_speed" style="@style/PlayerChip" android:text="@string/player_speed" android:contentDescription="@string/player_speed_label" />
+   <TextView android:id="@+id/player_next" style="@style/PlayerChip" android:text="下一集" />
+   <TextView android:id="@+id/player_playlist" style="@style/PlayerChip" android:text="选集" />
    <TextView android:id="@+id/player_fit" style="@style/PlayerChip" android:text="@string/player_fit" android:contentDescription="@string/player_fit_label" />
    <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
    <TextView android:id="@+id/player_reset" style="@style/PlayerChip" android:text="@string/player_reset" android:visibility="gone" />
    <ImageButton android:id="@+id/player_orientation" style="@style/PlayerIconButton" android:src="@drawable/player_rotate" android:contentDescription="@string/player_orientation" />
   </LinearLayout>
+  </HorizontalScrollView>
  </LinearLayout>
 </FrameLayout>
 <ImageButton android:id="@+id/player_unlock_button" style="@style/PlayerIconButton" android:layout_gravity="center_vertical|start" android:layout_marginStart="@dimen/player_gutter" android:src="@drawable/player_lock" android:contentDescription="@string/player_unlock" android:visibility="gone" />

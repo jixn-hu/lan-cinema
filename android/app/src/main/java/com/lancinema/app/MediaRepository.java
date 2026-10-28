@@ -9,8 +9,11 @@ import android.os.SystemClock;
 import androidx.media3.common.MediaItem;
 import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.cache.Cache;
 import androidx.media3.datasource.cache.CacheDataSink;
 import androidx.media3.datasource.cache.CacheDataSource;
+import androidx.media3.datasource.cache.CacheSpan;
+import androidx.media3.datasource.cache.ContentMetadata;
 import androidx.media3.datasource.cache.SimpleCache;
 import androidx.media3.exoplayer.offline.Download;
 import androidx.media3.exoplayer.offline.DownloadCursor;
@@ -52,6 +55,8 @@ final class MediaRepository {
   final Map<String, Download> liveDownloads = new ConcurrentHashMap<>();
   final Map<String, Long> downloadSpeeds = new ConcurrentHashMap<>();
   final Map<String, DownloadSpeed> speedMeters = new HashMap<>();
+  final Map<String, JSONObject> tracked = new ConcurrentHashMap<>();
+  final Set<String> promoting = ConcurrentHashMap.newKeySet();
   volatile boolean waitingForNetwork;
   final Runnable speedTick =
       new Runnable() {
@@ -112,6 +117,9 @@ final class MediaRepository {
             downloadSpeeds.remove(download.request.id);
             speedMeters.remove(download.request.id);
             pinned.remove(download.request.id);
+            tracked.remove(download.request.id);
+            promoting.remove(download.request.id);
+            saveTracked();
             app.getSharedPreferences("media", 0)
                 .edit()
                 .putStringSet("pinned", new HashSet<>(pinned))
@@ -120,6 +128,71 @@ final class MediaRepository {
         });
     downloads.resumeDownloads();
     notifications = new DownloadNotificationHelper(app, CHANNEL);
+    try {
+      JSONObject saved =
+          new JSONObject(app.getSharedPreferences("media", 0).getString("tracked", "{}"));
+      java.util.Iterator<String> keys = saved.keys();
+      while (keys.hasNext()) {
+        String id = keys.next();
+        tracked.put(id, saved.getJSONObject(id));
+        watchCache(id);
+      }
+    } catch (Exception ignored) {
+    }
+  }
+
+  synchronized void track(JSONObject data) {
+    try {
+      String id = key(data.getString("url"));
+      JSONObject previous = tracked.get(id);
+      JSONObject entry = new JSONObject(data.toString());
+      entry.remove("playlist");
+      entry.put("added", previous == null ? System.currentTimeMillis() : previous.optLong("added"));
+      tracked.put(id, entry);
+      saveTracked();
+      if (previous == null) watchCache(id);
+    } catch (Exception ignored) {
+    }
+  }
+
+  private synchronized void saveTracked() {
+    app.getSharedPreferences("media", 0)
+        .edit()
+        .putString("tracked", new JSONObject(tracked).toString())
+        .apply();
+  }
+
+  private void watchCache(String id) {
+    cache.addListener(
+        id,
+        new Cache.Listener() {
+          public void onSpanAdded(Cache cache, CacheSpan span) {
+            main.post(() -> promoteComplete(id));
+          }
+
+          public void onSpanRemoved(Cache cache, CacheSpan span) {}
+
+          public void onSpanTouched(Cache cache, CacheSpan oldSpan, CacheSpan newSpan) {}
+        });
+  }
+
+  long length(String id, JSONObject data) {
+    long known = ContentMetadata.getContentLength(cache.getContentMetadata(id));
+    return known >= 0 ? known : data.optLong("size", -1);
+  }
+
+  boolean complete(String id, long total) {
+    return total > 0 && cache.isCached(id, 0, total);
+  }
+
+  private void promoteComplete(String id) {
+    JSONObject data = tracked.get(id);
+    if (data == null
+        || pinned.contains(id)
+        || !complete(id, length(id, data))
+        || !promoting.add(id)) return;
+    // Pin immediately so a fully cached file survives the temporary-cache limit.
+    download(data);
   }
 
   private void monitorSpeed() {
@@ -198,6 +271,7 @@ final class MediaRepository {
   }
 
   void download(JSONObject data) {
+    track(data);
     String url = data.optString("url");
     String id = key(url);
     pinned.add(id);
@@ -218,6 +292,20 @@ final class MediaRepository {
   }
 
   void action(String id, String action) {
+    JSONObject data = tracked.get(id);
+    if (action.equals("resume") && !pinned.contains(id) && data != null) {
+      download(data);
+      return;
+    }
+    if (action.equals("remove") && !pinned.contains(id)) {
+      app.io.execute(
+          () -> {
+            cache.removeResource(id);
+            tracked.remove(id);
+            saveTracked();
+          });
+      return;
+    }
     main.post(
         () -> {
           if (action.equals("remove"))
@@ -236,11 +324,16 @@ final class MediaRepository {
 
   JSONArray list() {
     JSONArray out = new JSONArray();
+    Set<String> seen = new HashSet<>();
     try (DownloadCursor cursor = downloads.getDownloadIndex().getDownloads()) {
       while (cursor.moveToNext()) {
         Download stored = cursor.getDownload();
         Download d = liveDownloads.getOrDefault(stored.request.id, stored);
+        seen.add(d.request.id);
         JSONObject info = new JSONObject(new String(d.request.data, StandardCharsets.UTF_8));
+        long total = d.contentLength >= 0 ? d.contentLength : length(d.request.id, info);
+        long bytes = cache.getCachedBytes(d.request.id, 0, total > 0 ? total : Long.MAX_VALUE);
+        boolean full = complete(d.request.id, total);
         String[] states = {"等待下载", "暂停", "下载中", "已完成", "下载失败，请检查网络或可用空间", "移除中", "重新下载"};
         out.put(
             new JSONObject()
@@ -248,24 +341,53 @@ final class MediaRepository {
                 .put("url", d.request.uri.toString())
                 .put("name", info.optString("name", "视频"))
                 .put("type", info.optString("type", "video"))
-                .put("bytes", d.getBytesDownloaded())
-                .put("total", d.contentLength)
+                .put("bytes", bytes)
+                .put("total", total)
+                .put("added", d.startTimeMs)
+                .put("progressUrl", info.optString("progressUrl"))
+                .put("temporary", false)
                 .put(
                     "speed",
                     d.state == Download.STATE_DOWNLOADING
                         ? downloadSpeeds.getOrDefault(d.request.id, 0L)
                         : 0L)
                 .put("downloading", d.state == Download.STATE_DOWNLOADING)
-                .put("complete", d.state == Download.STATE_COMPLETED)
+                .put("complete", full)
                 .put(
                     "paused", d.state == Download.STATE_STOPPED || d.state == Download.STATE_FAILED)
                 .put(
                     "status",
-                    waitingForNetwork && d.state == Download.STATE_QUEUED
-                        ? "等待网络连接"
-                        : d.state >= 0 && d.state < states.length ? states[d.state] : "等待中"));
+                    full
+                        ? "已下载"
+                        : waitingForNetwork && d.state == Download.STATE_QUEUED
+                            ? "等待网络连接"
+                            : d.state >= 0 && d.state < states.length ? states[d.state] : "等待中"));
       }
     } catch (Exception ignored) {
+    }
+    for (Map.Entry<String, JSONObject> entry : tracked.entrySet()) {
+      String id = entry.getKey();
+      if (seen.contains(id)) continue;
+      try {
+        JSONObject data = entry.getValue();
+        long total = length(id, data);
+        long bytes = cache.getCachedBytes(id, 0, total > 0 ? total : Long.MAX_VALUE);
+        if (bytes <= 0) continue;
+        boolean full = complete(id, total);
+        out.put(
+            new JSONObject(data.toString())
+                .put("id", id)
+                .put("bytes", bytes)
+                .put("total", total)
+                .put("temporary", !full)
+                .put("complete", full)
+                .put("downloading", false)
+                .put("paused", true)
+                .put("speed", 0)
+                .put("status", full ? "已下载" : "播放缓存"));
+        if (full) main.post(() -> promoteComplete(id));
+      } catch (Exception ignored) {
+      }
     }
     return out;
   }
@@ -288,7 +410,11 @@ final class MediaRepository {
         () -> {
           try {
             Download d = downloads.getDownloadIndex().getDownload(id);
-            if (d == null || d.state != Download.STATE_COMPLETED)
+            JSONObject info =
+                d == null
+                    ? tracked.get(id)
+                    : new JSONObject(new String(d.request.data, StandardCharsets.UTF_8));
+            if (info == null || !complete(id, length(id, info)))
               throw new java.io.IOException("文件尚未完整下载");
             CacheDataSource source =
                 new CacheDataSource.Factory()
@@ -298,8 +424,8 @@ final class MediaRepository {
                     .createDataSource();
             androidx.media3.datasource.DataSpec spec =
                 new androidx.media3.datasource.DataSpec.Builder()
-                    .setUri(d.request.uri)
-                    .setKey(d.request.customCacheKey)
+                    .setUri(info.getString("url"))
+                    .setKey(id)
                     .build();
             try (java.io.InputStream input =
                     new androidx.media3.datasource.DataSourceInputStream(source, spec);

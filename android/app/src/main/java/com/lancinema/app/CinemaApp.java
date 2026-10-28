@@ -16,6 +16,7 @@ public final class CinemaApp extends Application implements Application.Activity
   FileServer server;
   PeerDiscovery discovery;
   String deviceId;
+  org.json.JSONArray playlist;
   private MediaRepository media;
   volatile boolean unlocked = false;
   private int visible = 0;

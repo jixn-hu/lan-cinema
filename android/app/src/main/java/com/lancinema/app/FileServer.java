@@ -30,10 +30,11 @@ final class FileServer extends NanoHTTPD {
       response = json(Response.Status.INTERNAL_ERROR, "请求失败，请刷新后重试");
     }
     response.addHeader("Access-Control-Allow-Origin", "*");
-    response.addHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, OPTIONS");
+    response.addHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, DELETE, OPTIONS");
     response.addHeader("Access-Control-Allow-Headers", "Range, If-Range, Content-Type");
     response.addHeader(
-        "Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, ETag");
+        "Access-Control-Expose-Headers",
+        "Content-Range, Content-Length, Accept-Ranges, ETag, X-Library-Revision");
     response.addHeader("X-Content-Type-Options", "nosniff");
     return response;
   }
@@ -51,7 +52,11 @@ final class FileServer extends NanoHTTPD {
               .put("version", 1)
               .put(
                   "features",
-                  new JSONArray(Arrays.asList("range", "progress", "download", "discovery"))));
+                  new JSONArray(
+                      Arrays.asList(
+                          "range", "progress", "download", "discovery", "delete", "changes"))));
+    if (path.equals("/api/changes"))
+      return ok(new JSONObject().put("revision", app.shares.revision()));
     if (path.equals("/api/devices"))
       return ok(
           new JSONObject()
@@ -64,7 +69,7 @@ final class FileServer extends NanoHTTPD {
               .put("lan", PeerDiscovery.addresses(getListeningPort())));
     if (path.equals("/api/dirs")) return ok(new JSONObject().put("dirs", new JSONArray()));
     if (path.equals("/api/files")) {
-      List<JSONObject> files = app.shares.files();
+      List<JSONObject> files = app.shares.files("true".equals(s.getParms().get("refresh")));
       Map<String, String> q = s.getParms();
       String type = q.getOrDefault("type", "all"),
           search = q.getOrDefault("search", "").toLowerCase(Locale.ROOT);
@@ -88,7 +93,9 @@ final class FileServer extends NanoHTTPD {
         safe.remove("mime");
         out.put(safe);
       }
-      return ok(out);
+      Response result = ok(out);
+      result.addHeader("X-Library-Revision", app.shares.revision());
+      return result;
     }
     if (path.equals("/api/progress"))
       return ok(new JSONObject(app.getSharedPreferences("progress", 0).getAll()));
@@ -108,7 +115,23 @@ final class FileServer extends NanoHTTPD {
     }
     if (path.startsWith("/api/file/")) {
       String[] parts = path.split("/");
+      if (parts.length == 4 && s.getMethod() == Method.DELETE) {
+        Map<String, String> body = new HashMap<>();
+        s.parseBody(body);
+        JSONObject data = new JSONObject(body.getOrDefault("postData", "{}"));
+        try {
+          app.shares.delete(parts[3], data.getLong("size"), data.getDouble("mtime"));
+        } catch (SecurityException e) {
+          return json(Response.Status.FORBIDDEN, e.getMessage());
+        } catch (IllegalStateException e) {
+          return json(Response.Status.CONFLICT, e.getMessage());
+        }
+        app.getSharedPreferences("progress", 0).edit().remove(parts[3]).apply();
+        return ok(new JSONObject().put("ok", true).put("revision", app.shares.revision()));
+      }
       if (parts.length != 5) return json(Response.Status.NOT_FOUND, "文件不存在");
+      if (s.getMethod() != Method.GET && s.getMethod() != Method.HEAD)
+        return json(Response.Status.METHOD_NOT_ALLOWED, "请求方式不支持");
       JSONObject target = null;
       for (JSONObject f : app.shares.files())
         if (f.optString("id").equals(parts[3])) {
@@ -116,6 +139,7 @@ final class FileServer extends NanoHTTPD {
           break;
         }
       if (target == null) return json(Response.Status.NOT_FOUND, "文件不存在或已停止共享");
+      target = app.shares.metadata(Uri.parse(target.getString("uri")));
       if (parts[4].equals("cover") && target.optString("type").equals("video"))
         return cover(target);
       if (!parts[4].equals("stream") && !parts[4].equals("cover"))

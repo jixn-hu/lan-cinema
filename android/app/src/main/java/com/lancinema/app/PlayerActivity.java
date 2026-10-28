@@ -24,6 +24,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Locale;
 import java.util.function.IntConsumer;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
@@ -32,6 +33,8 @@ public final class PlayerActivity extends Activity {
   private ExoPlayer player;
   private PlayerView view;
   private JSONObject info;
+  private JSONArray queue;
+  private int queueIndex;
   private FrameLayout root, controls;
   private View touch, transport, loading, errorPanel, unlock;
   private TextView feedback, position, duration, detail, speed, reset;
@@ -92,7 +95,15 @@ public final class PlayerActivity extends Activity {
       getWindow().setAttributes(attributes);
     }
     try {
-      info = new JSONObject(getIntent().getStringExtra("video"));
+      info =
+          new JSONObject(
+              state != null && state.containsKey("video")
+                  ? state.getString("video")
+                  : getIntent().getStringExtra("video"));
+      queue = app.playlist == null ? new JSONArray().put(info) : app.playlist;
+      queueIndex = 0;
+      for (int i = 0; i < queue.length(); i++)
+        if (queue.getJSONObject(i).optString("url").equals(info.optString("url"))) queueIndex = i;
     } catch (Exception e) {
       finish();
       return;
@@ -142,6 +153,9 @@ public final class PlayerActivity extends Activity {
     click(R.id.player_fit, this::pictureSheet);
     click(R.id.player_orientation, this::orientationSheet);
     click(R.id.player_more, this::settingsSheet);
+    click(R.id.player_next, this::playNext);
+    click(R.id.player_playlist, this::playlistSheet);
+    updateQueueButtons();
     click(
         R.id.player_reset,
         () -> {
@@ -238,6 +252,49 @@ public final class PlayerActivity extends Activity {
               action.run();
               scheduleHide();
             });
+  }
+
+  private void updateQueueButtons() {
+    View next = findViewById(R.id.player_next);
+    next.setEnabled(queueIndex + 1 < queue.length());
+    next.setAlpha(next.isEnabled() ? 1 : .35f);
+    ((TextView) findViewById(R.id.player_playlist))
+        .setText("选集 " + (queueIndex + 1) + "/" + queue.length());
+  }
+
+  private void playlistSheet() {
+    String[] names = new String[queue.length()];
+    for (int i = 0; i < names.length; i++)
+      names[i] = (i + 1) + "  " + queue.optJSONObject(i).optString("name", "视频");
+    options("播放列表", names, queueIndex, this::playEpisode);
+  }
+
+  private void playNext() {
+    if (queueIndex + 1 < queue.length()) playEpisode(queueIndex + 1);
+  }
+
+  private void playEpisode(int index) {
+    if (index < 0 || index >= queue.length() || index == queueIndex) return;
+    stopPlayer();
+    queueIndex = index;
+    try {
+      info = new JSONObject(queue.getJSONObject(index).toString());
+    } catch (Exception e) {
+      return;
+    }
+    ended = false;
+    videoRatio = 0;
+    resumePlay = true;
+    transform.reset();
+    applyTransform();
+    errorPanel.setVisibility(View.GONE);
+    ((TextView) findViewById(R.id.player_title)).setText(info.optString("name", "视频"));
+    ((TextView) findViewById(R.id.player_source))
+        .setText(
+            info.optBoolean("offline") ? "LAN CINEMA  /  离线观看" : "LAN CINEMA  /  局域网直连 · 自动缓存");
+    updateQueueButtons();
+    startPlayer();
+    showControls(true);
   }
 
   private int dp(float n) {
@@ -756,8 +813,13 @@ public final class PlayerActivity extends Activity {
   public void onResume() {
     super.onResume();
     if (info == null || app.requireUnlock(this)) return;
+    startPlayer();
+  }
+
+  private void startPlayer() {
     if (player == null) {
       MediaRepository media = app.media();
+      media.track(info);
       CacheDataSource.Factory factory = media.sources;
       if (info.optBoolean("offline"))
         factory =
@@ -812,6 +874,11 @@ public final class PlayerActivity extends Activity {
                 ended = true;
                 stopBoost();
                 save();
+                int finished = queueIndex;
+                handler.post(
+                    () -> {
+                      if (ended && queueIndex == finished) playNext();
+                    });
               }
               if (state == Player.STATE_READY) errorPanel.setVisibility(View.GONE);
               updatePlayback();
@@ -876,10 +943,16 @@ public final class PlayerActivity extends Activity {
         "position",
         player == null ? info.optDouble("position") : player.getCurrentPosition() / 1000.0);
     state.putBoolean("playing", player == null ? resumePlay : player.getPlayWhenReady());
+    if (info != null) state.putString("video", info.toString());
   }
 
   @Override
   public void onPause() {
+    stopPlayer();
+    super.onPause();
+  }
+
+  private void stopPlayer() {
     cancelGesture();
     handler.removeCallbacks(tick);
     handler.removeCallbacks(saveTick);
@@ -893,7 +966,6 @@ public final class PlayerActivity extends Activity {
       player.release();
       player = null;
     }
-    super.onPause();
   }
 
   @Override

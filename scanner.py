@@ -1,4 +1,4 @@
-"""递归扫描配置目录，生成文件清单（带 15 秒 TTL 缓存）。"""
+"""递归扫描配置目录，复用清单直到手动或定时刷新。"""
 import hashlib
 import os
 import time
@@ -40,9 +40,10 @@ class FileScanner:
         self._dirs = dirs
         self._cache: list[FileInfo] | None = None
         self._cached_at: float = 0.0
-        self._ttl = 15.0
+        self._ttl = float("inf")
         self._lock = threading.RLock()
         self._index: dict[str, FileInfo] = {}
+        self.revision = str(time.time_ns())
 
     @property
     def dirs(self) -> list[str]:
@@ -66,9 +67,16 @@ class FileScanner:
         with self._lock:
             self._cached_at = 0
 
+    def discard(self, identifier: str):
+        with self._lock:
+            self._index.pop(identifier, None)
+            if self._cache is not None:
+                self._cache = [f for f in self._cache if f.id != identifier]
+            self.revision = str(time.time_ns())
+
     def _scan(self) -> list[FileInfo]:
         now = time.time()
-        if self._cache is not None and now - self._cached_at < self._ttl:
+        if self._cache is not None and self._cached_at > 0 and now - self._cached_at < self._ttl:
             return self._cache
         files = []
         for root in self._dirs:
@@ -101,6 +109,7 @@ class FileScanner:
         self._cache = files
         self._index = {f.id: f for f in files}
         self._cached_at = time.time()
+        self.revision = str(time.time_ns())
         return files
 
     @staticmethod
