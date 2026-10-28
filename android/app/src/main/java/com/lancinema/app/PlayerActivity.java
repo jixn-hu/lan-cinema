@@ -91,7 +91,6 @@ public final class PlayerActivity extends Activity {
           WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
       getWindow().setAttributes(attributes);
     }
-    immersive();
     try {
       info = new JSONObject(getIntent().getStringExtra("video"));
     } catch (Exception e) {
@@ -110,6 +109,7 @@ public final class PlayerActivity extends Activity {
     orientationMode = getPreferences(0).getInt("orientation", 0);
     audio = (AudioManager) getSystemService(AUDIO_SERVICE);
     setContentView(R.layout.player);
+    immersive();
     root = findViewById(R.id.player_root);
     controls = findViewById(R.id.player_controls);
     view = findViewById(R.id.video_view);
@@ -261,7 +261,9 @@ public final class PlayerActivity extends Activity {
   private void immersive() {
     if (Build.VERSION.SDK_INT >= 30) {
       getWindow().setDecorFitsSystemWindows(false);
-      WindowInsetsController controller = getWindow().getInsetsController();
+      // Before attachment the view may not have a controller yet. Window's getter
+      // can dereference a missing DecorView during Activity.onCreate on Android 11+.
+      WindowInsetsController controller = getWindow().getDecorView().getWindowInsetsController();
       if (controller != null) {
         controller.hide(WindowInsets.Type.systemBars());
         controller.setSystemBarsBehavior(
