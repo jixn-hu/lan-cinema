@@ -154,7 +154,12 @@ def main():
     addrs_v4, addrs_v6 = local_addresses()
 
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # On Windows SO_REUSEADDR permits a second server to steal the same port.
+    # A duplicate startup must fail clearly instead of routing requests unpredictably.
+    if os.name == "nt":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
     try:
         sock.bind(("::", PORT))

@@ -1,1 +1,49 @@
-<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:layout_width="match_parent" android:layout_height="match_parent" app:surface_type="texture_view" app:resize_mode="fit" app:show_buffering="when_playing"/>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+ android:id="@+id/player_root" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000000" android:keepScreenOn="true">
+<androidx.media3.ui.PlayerView android:id="@+id/video_view" android:layout_width="match_parent" android:layout_height="match_parent"
+ app:surface_type="texture_view" app:resize_mode="fit" app:use_controller="false" app:show_buffering="never" />
+<View android:id="@+id/gesture_area" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" />
+<FrameLayout android:id="@+id/player_controls" android:layout_width="match_parent" android:layout_height="match_parent">
+ <LinearLayout android:id="@+id/player_header" android:layout_width="match_parent" android:layout_height="88dp" android:gravity="center_vertical"
+  android:paddingStart="@dimen/player_gutter" android:paddingEnd="@dimen/player_gutter" android:paddingBottom="16dp" android:background="@drawable/player_shade_top">
+  <ImageButton android:id="@+id/player_back" style="@style/PlayerIconButton" android:src="@drawable/player_back" android:contentDescription="@string/player_back" />
+  <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:paddingStart="8dp" android:paddingEnd="8dp">
+   <TextView android:id="@+id/player_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="17sp" android:textColor="#FFFFFF" android:fontFamily="sans-serif-medium" android:maxLines="1" android:ellipsize="end" />
+   <TextView android:id="@+id/player_source" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#C9F591" android:layout_marginTop="5dp" />
+  </LinearLayout>
+  <ImageButton android:id="@+id/player_more" style="@style/PlayerIconButton" android:src="@drawable/player_more" android:contentDescription="@string/player_more" />
+ </LinearLayout>
+ <LinearLayout android:id="@+id/player_transport" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center_vertical">
+  <ImageButton android:id="@+id/player_rewind" style="@style/PlayerIconButton" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/player_rewind" android:contentDescription="@string/player_rewind" />
+  <ImageButton android:id="@+id/player_play" style="@style/PlayerIconButton" android:layout_width="76dp" android:layout_height="76dp" android:padding="20dp" android:layout_marginStart="24dp" android:layout_marginEnd="24dp" android:background="@drawable/player_play_bg" android:src="@drawable/player_pause" android:contentDescription="@string/player_pause" />
+  <ImageButton android:id="@+id/player_forward" style="@style/PlayerIconButton" android:layout_width="56dp" android:layout_height="56dp" android:src="@drawable/player_forward" android:contentDescription="@string/player_forward" />
+ </LinearLayout>
+ <ImageButton android:id="@+id/player_lock" style="@style/PlayerIconButton" android:layout_gravity="center_vertical|start" android:layout_marginStart="@dimen/player_gutter" android:src="@drawable/player_unlock" android:contentDescription="@string/player_lock" />
+ <LinearLayout android:id="@+id/player_bottom" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:orientation="vertical" android:background="@drawable/player_shade_bottom"
+  android:paddingStart="@dimen/player_gutter" android:paddingEnd="@dimen/player_gutter" android:paddingTop="36dp" android:paddingBottom="12dp">
+  <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+   <TextView android:id="@+id/player_position" style="@style/PlayerTime" android:text="@string/player_zero" />
+   <TextView android:id="@+id/player_detail" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="end" android:textColor="#AAFFFFFF" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+   <TextView android:id="@+id/player_duration" style="@style/PlayerTime" android:layout_marginStart="14dp" android:text="@string/player_zero" />
+  </LinearLayout>
+  <androidx.media3.ui.DefaultTimeBar android:id="@+id/player_timeline" android:layout_width="match_parent" android:layout_height="40dp" android:contentDescription="@string/player_timeline"
+   app:bar_height="3dp" app:played_color="#C9F591" app:scrubber_color="#C9F591" app:buffered_color="#88FFFFFF" app:unplayed_color="#33FFFFFF" app:scrubber_enabled_size="10dp" app:scrubber_dragged_size="16dp" />
+  <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:gravity="center_vertical">
+   <TextView android:id="@+id/player_speed" style="@style/PlayerChip" android:text="@string/player_speed" android:contentDescription="@string/player_speed_label" />
+   <TextView android:id="@+id/player_fit" style="@style/PlayerChip" android:text="@string/player_fit" android:contentDescription="@string/player_fit_label" />
+   <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
+   <TextView android:id="@+id/player_reset" style="@style/PlayerChip" android:text="@string/player_reset" android:visibility="gone" />
+   <ImageButton android:id="@+id/player_orientation" style="@style/PlayerIconButton" android:src="@drawable/player_rotate" android:contentDescription="@string/player_orientation" />
+  </LinearLayout>
+ </LinearLayout>
+</FrameLayout>
+<ImageButton android:id="@+id/player_unlock_button" style="@style/PlayerIconButton" android:layout_gravity="center_vertical|start" android:layout_marginStart="@dimen/player_gutter" android:src="@drawable/player_lock" android:contentDescription="@string/player_unlock" android:visibility="gone" />
+<ProgressBar android:id="@+id/player_loading" style="?android:attr/progressBarStyle" android:layout_width="44dp" android:layout_height="44dp" android:layout_gravity="center" android:indeterminateTint="#C9F591" android:visibility="gone" />
+<TextView android:id="@+id/player_feedback" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center_horizontal|top" android:layout_marginTop="100dp" android:layout_marginStart="24dp" android:layout_marginEnd="24dp"
+ android:padding="14dp" android:textColor="#C9F591" android:textSize="15sp" android:gravity="center" android:background="@drawable/player_pill" android:visibility="gone" android:accessibilityLiveRegion="polite" />
+<LinearLayout android:id="@+id/player_error" android:layout_width="300dp" android:layout_height="wrap_content" android:layout_gravity="center" android:orientation="vertical" android:padding="24dp" android:background="@drawable/player_pill" android:gravity="center" android:visibility="gone">
+ <TextView android:id="@+id/player_error_text" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFFFFF" android:textSize="14sp" android:gravity="center" />
+ <TextView android:id="@+id/player_retry" style="@style/PlayerChip" android:layout_marginTop="16dp" android:text="@string/player_retry" />
+</LinearLayout>
+<ProgressBar android:id="@+id/player_mini_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="2dp" android:layout_gravity="bottom" android:max="1000" android:progressTint="#C9F591" android:progressBackgroundTint="#22FFFFFF" android:secondaryProgressTint="#66FFFFFF" android:importantForAccessibility="no" android:visibility="gone" />
+</FrameLayout>

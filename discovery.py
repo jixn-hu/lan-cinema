@@ -1,6 +1,9 @@
 """DNS-SD discovery shared with Android NsdManager; never proxies file data."""
 import logging
+import ipaddress
+import os
 import socket
+import subprocess
 import threading
 import time
 import uuid
@@ -9,10 +12,49 @@ SERVICE_TYPE = "_lanvideo._tcp.local."
 DEVICE_ID = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"lanvideo:{uuid.getnode()}"))
 
 
+def _usable_ipv4(value):
+    try:
+        ip = ipaddress.IPv4Address(value)
+        return not (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast)
+    except ipaddress.AddressValueError:
+        return False
+
+
 def addresses():
+    """Advertise the connected LAN, rather than VMware/Hyper-V host-only networks."""
+    configured = os.environ.get("FB_ADVERTISE_IP", "")
+    if configured:
+        return list(dict.fromkeys(ip.strip() for ip in configured.split(",") if _usable_ipv4(ip.strip())))
+    if os.name == "nt":
+        try:
+            command = (
+                "Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and "
+                "$_.NetAdapter.Status -eq 'Up' -and "
+                "$_.InterfaceAlias -notmatch 'VMware|vEthernet|WSL|Loopback|TAP|TUN|VPN' } "
+                "| ForEach-Object { $_.IPv4Address.IPAddress }"
+            )
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            connected = [ip.strip() for ip in result.stdout.splitlines() if _usable_ipv4(ip.strip())]
+            if connected:
+                return list(dict.fromkeys(connected))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    # Connecting a UDP socket selects a route without sending a packet.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect(("192.0.2.1", 9))
+            preferred = route.getsockname()[0]
+            if _usable_ipv4(preferred):
+                return [preferred]
+    except OSError:
+        pass
     try:
         return sorted({entry[4][0] for entry in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
-                       if not entry[4][0].startswith(("127.", "169.254."))})
+                       if _usable_ipv4(entry[4][0])})
     except OSError:
         return []
 

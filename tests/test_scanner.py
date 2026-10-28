@@ -41,3 +41,12 @@ def test_scan_cache(tmp_path, monkeypatch):
     assert len(fs.scan()) == 1  # 命中缓存
     monkeypatch.setattr(fs, "_cached_at", 0.0)  # 强制过期
     assert len(fs.scan()) == 2
+
+
+def test_known_stream_lookup_does_not_wait_for_directory_scan(tmp_path, monkeypatch):
+    (tmp_path / "video.mp4").write_bytes(b"video")
+    fs = FileScanner([str(tmp_path)])
+    target = fs.scan()[0]
+    fs._cached_at = 0
+    monkeypatch.setattr(fs, "_scan", lambda: (_ for _ in ()).throw(AssertionError("Stream rescanned library")))
+    assert fs.find(target.id) == target

@@ -1,0 +1,31 @@
+<resources>
+<dimen name="player_gutter">12dp</dimen>
+<style name="PlayerIconButton" parent="">
+<item name="android:layout_width">48dp</item><item name="android:layout_height">48dp</item>
+<item name="android:padding">12dp</item><item name="android:tint">#FFFFFF</item>
+<item name="android:background">@drawable/player_button_bg</item><item name="android:focusable">true</item>
+</style>
+<style name="PlayerChip" parent="">
+<item name="android:layout_width">wrap_content</item><item name="android:layout_height">48dp</item>
+<item name="android:minWidth">56dp</item><item name="android:gravity">center</item>
+<item name="android:paddingStart">12dp</item><item name="android:paddingEnd">12dp</item>
+<item name="android:textColor">#FFFFFF</item><item name="android:textSize">13sp</item>
+<item name="android:fontFamily">sans-serif-medium</item><item name="android:background">@drawable/player_button_bg</item>
+<item name="android:clickable">true</item><item name="android:focusable">true</item>
+</style>
+<style name="PlayerTime" parent="">
+<item name="android:layout_width">wrap_content</item><item name="android:layout_height">wrap_content</item>
+<item name="android:textColor">#FFFFFF</item><item name="android:textSize">12sp</item>
+<item name="android:fontFamily">sans-serif-medium</item>
+</style>
+<string name="player_back">返回片库</string><string name="player_more">播放设置与手势说明</string>
+<string name="player_pause">暂停</string><string name="player_play">播放</string>
+<string name="player_rewind">快退 10 秒</string><string name="player_forward">快进 10 秒</string>
+<string name="player_lock">锁定触控</string><string name="player_unlock">解锁触控</string>
+<string name="player_orientation">横竖屏设置</string><string name="player_speed">倍速 1×</string>
+<string name="player_speed_label">选择播放倍速</string><string name="player_fit">画面</string>
+<string name="player_fit_label">画面比例设置</string><string name="player_zero">00:00</string>
+<string name="player_timeline">播放进度</string><string name="player_reset">复位</string>
+<string name="player_retry">重新加载</string>
+<string name="player_gesture_area">单击显示控制，双击左右快进退，长按临时加速，双指在触摸位置缩放</string>
+</resources>

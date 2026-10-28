@@ -42,6 +42,15 @@ createApp({
         file: null,
         rate: 1,
         zoom: 1,
+        seekPreview: null,
+        x: 0,
+        y: 0,
+        controls: true,
+        playing: false,
+        current: 0,
+        duration: 0,
+        buffered: 0,
+        waiting: false,
         fit: "contain",
         expanded: false,
         boost: false,
@@ -56,6 +65,13 @@ createApp({
       toastTimer: null,
       pointerPoints: {},
       pinchDistance: 0,
+      gestureMoved: false,
+      gestureMulti: false,
+      gestureAxis: "",
+      gestureStart: 0,
+      downloadsTimer: null,
+      controlsTimer: null,
+      resizeObserver: null,
     };
   },
   computed: {
@@ -84,21 +100,42 @@ createApp({
       return result.href;
     },
     async request(path, options = {}, source = this.source) {
-      const response = await fetch(this.apiURL(path, source), {
-        ...options,
-        signal: AbortSignal.timeout(12000),
-      });
-      if (!response.ok) {
-        let info;
-        try {
-          info = await response.json();
-        } catch {}
-        throw Error(
-          info?.detail ||
-            `连接失败（${response.status}），请检查设备地址或访问令牌`,
-        );
+      const url = this.apiURL(path, source);
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        path.startsWith("/api/files") ? 60000 : 12000,
+      );
+      try {
+        const response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          let info;
+          try {
+            info = await response.json();
+          } catch {}
+          throw Error(
+            info?.detail ||
+              `连接失败（${response.status}），请检查设备地址或访问令牌`,
+          );
+        }
+        return await response.json();
+      } catch (error) {
+        const address = new URL(url).origin;
+        if (controller.signal.aborted)
+          throw Error(
+            `连接 ${address} 超时。请确认电脑服务仍在运行、地址属于当前 Wi-Fi，并允许防火墙的局域网访问`,
+          );
+        if (error instanceof TypeError)
+          throw Error(
+            `无法访问 ${address}。请检查共享服务、电脑防火墙和设备地址；自动发现后也可能选到虚拟网卡，请尝试手动连接电脑的实际局域网 IP`,
+          );
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-      return response.json();
     },
     fmtSize(n) {
       if (!Number.isFinite(n) || n < 0) return "—";
@@ -324,6 +361,15 @@ createApp({
           source: this.source,
           rate: 1,
           zoom: 1,
+          seekPreview: null,
+          x: 0,
+          y: 0,
+          controls: true,
+          playing: false,
+          current: 0,
+          duration: 0,
+          buffered: 0,
+          waiting: false,
           fit: "contain",
           expanded: false,
           boost: false,
@@ -336,6 +382,8 @@ createApp({
     initVideo(f) {
       const v = this.$refs.video;
       v.src = this.mediaURL(f, this.player.source);
+      this.resizeObserver = new ResizeObserver(() => this.resetZoom());
+      this.resizeObserver.observe(this.$refs.stage);
       v.onerror = () =>
         (this.player.error =
           "这个视频的编码可能不被浏览器支持，可使用安卓 App 或下载后播放。");
@@ -372,7 +420,9 @@ createApp({
       if (!this.player.file) return;
       this.saveProgress();
       clearInterval(this.saveTimer);
-      clearTimeout(this.holdTimer);
+      this.pointerUpBoost();
+      clearTimeout(this.controlsTimer);
+      this.resizeObserver?.disconnect();
       const v = this.$refs.video;
       if (v) {
         v.pause();
@@ -384,6 +434,15 @@ createApp({
         file: null,
         rate: 1,
         zoom: 1,
+        seekPreview: null,
+        x: 0,
+        y: 0,
+        controls: true,
+        playing: false,
+        current: 0,
+        duration: 0,
+        buffered: 0,
+        waiting: false,
         fit: "contain",
         boost: false,
       };
@@ -399,43 +458,119 @@ createApp({
     setRate() {
       if (this.$refs.video) this.$refs.video.playbackRate = this.player.rate;
     },
-    zoomBy(n) {
-      this.player.zoom = Math.max(1, Math.min(3, this.player.zoom + n));
+    zoomAt(next, from, to = from) {
+      const stage = this.$refs.stage;
+      if (!stage) return;
+      next = Math.max(1, Math.min(4, next));
+      const ratio = next / this.player.zoom;
+      this.player.x = Math.max(
+        stage.clientWidth * (1 - next),
+        Math.min(0, to.x - (from.x - this.player.x) * ratio),
+      );
+      this.player.y = Math.max(
+        stage.clientHeight * (1 - next),
+        Math.min(0, to.y - (from.y - this.player.y) * ratio),
+      );
+      this.player.zoom = next;
+    },
+    zoomBy(n, event) {
+      const stage = this.$refs.stage;
+      if (!stage) return;
+      const rect = stage.getBoundingClientRect();
+      const center = event
+        ? { x: event.clientX - rect.left, y: event.clientY - rect.top }
+        : { x: rect.width / 2, y: rect.height / 2 };
+      this.zoomAt(this.player.zoom + n, center);
+    },
+    resetZoom() {
+      this.player.zoom = 1;
+      this.player.x = this.player.y = 0;
+      this.cancelVideoGesture();
     },
     pointerDown(e) {
-      this.pointerPoints[e.pointerId] = { x: e.clientX, y: e.clientY };
-      const pts = Object.values(this.pointerPoints);
-      clearTimeout(this.holdTimer);
-      if (pts.length === 2) {
-        this.pinchDistance = Math.hypot(
-          pts[0].x - pts[1].x,
-          pts[0].y - pts[1].y,
-        );
-        this.pointerUpBoost();
+      if (e.target.closest("button,input,select")) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const rect = this.$refs.stage.getBoundingClientRect();
+      const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      this.pointerPoints[e.pointerId] = {
+        ...point,
+        startX: point.x,
+        startY: point.y,
+      };
+      this.$refs.stage.setPointerCapture(e.pointerId);
+      this.pointerUpBoost();
+      if (Object.keys(this.pointerPoints).length > 1) {
+        this.gestureMulti = true;
+        this.player.seekPreview = null;
+        this.gestureAxis = "";
+        this.gestureMoved = true;
+        this.player.controls = false;
         return;
       }
-      if (
-        e.target === this.$refs.video &&
-        e.offsetY > this.$refs.video.clientHeight - 55
-      )
-        return;
+      this.gestureMulti = this.gestureMoved = false;
+      this.gestureAxis = "";
+      this.gestureStart = this.$refs.video?.currentTime || 0;
       this.holdTimer = setTimeout(() => {
-        if (!this.$refs.video) return;
+        const v = this.$refs.video;
+        if (!v || v.paused) return;
         this.player.boost = true;
-        this.$refs.video.playbackRate = Math.max(
-          this.boostRate,
-          this.player.rate,
-        );
-      }, 450);
+        this.player.controls = false;
+        v.playbackRate = Math.max(this.boostRate, this.player.rate);
+      }, 400);
     },
     pointerMove(e) {
-      if (!this.pointerPoints[e.pointerId]) return;
-      this.pointerPoints[e.pointerId] = { x: e.clientX, y: e.clientY };
-      const pts = Object.values(this.pointerPoints);
-      if (pts.length === 2) {
-        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        if (this.pinchDistance) this.zoomBy((dist - this.pinchDistance) / 200);
-        this.pinchDistance = dist;
+      const prev = this.pointerPoints[e.pointerId];
+      if (!prev || !this.$refs.stage) return;
+      const old = Object.values(this.pointerPoints);
+      const rect = this.$refs.stage.getBoundingClientRect();
+      const point = {
+        ...prev,
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+      this.pointerPoints[e.pointerId] = point;
+      const points = Object.values(this.pointerPoints);
+      if (points.length === 2) {
+        const distance = (pts) =>
+          Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const center = (pts) => ({
+          x: (pts[0].x + pts[1].x) / 2,
+          y: (pts[0].y + pts[1].y) / 2,
+        });
+        if (distance(old) > 0)
+          this.zoomAt(
+            (this.player.zoom * distance(points)) / distance(old),
+            center(old),
+            center(points),
+          );
+      } else if (points.length === 1) {
+        if (Math.hypot(point.x - prev.startX, point.y - prev.startY) > 8) {
+          this.gestureMoved = true;
+          this.pointerUpBoost();
+        }
+        if (this.gestureMoved && !this.gestureMulti && this.player.zoom > 1) {
+          this.zoomAt(this.player.zoom, prev, point);
+        } else if (
+          this.gestureMoved &&
+          !this.gestureMulti &&
+          this.player.zoom === 1
+        ) {
+          const dx = point.x - prev.startX,
+            dy = point.y - prev.startY;
+          if (!this.gestureAxis && Math.max(Math.abs(dx), Math.abs(dy)) > 12)
+            this.gestureAxis = Math.abs(dx) > Math.abs(dy) ? "seek" : "ignore";
+          if (this.gestureAxis === "seek" && this.player.duration > 0) {
+            const span = Math.min(120, Math.max(10, this.player.duration / 3));
+            this.player.seekPreview = Math.max(
+              0,
+              Math.min(
+                this.player.duration,
+                this.gestureStart + (dx / rect.width) * span,
+              ),
+            );
+            this.player.controls = true;
+          }
+        }
       }
     },
     pointerUpBoost() {
@@ -446,9 +581,77 @@ createApp({
       }
     },
     pointerUp(e) {
+      if (!this.pointerPoints[e.pointerId]) return;
+      const held = this.player.boost;
+      if (
+        e.type === "pointerup" &&
+        this.gestureAxis === "seek" &&
+        this.player.seekPreview !== null &&
+        this.$refs.video
+      )
+        this.$refs.video.currentTime = this.player.seekPreview;
+      this.player.seekPreview = null;
       delete this.pointerPoints[e.pointerId];
-      this.pinchDistance = 0;
       this.pointerUpBoost();
+      if (
+        !this.gestureMoved &&
+        !this.gestureMulti &&
+        !held &&
+        e.type === "pointerup"
+      ) {
+        this.player.controls = !this.player.controls;
+      }
+      if (!Object.keys(this.pointerPoints).length)
+        this.schedulePlayerControls();
+    },
+    cancelVideoGesture() {
+      this.pointerUpBoost();
+      this.pointerPoints = {};
+      this.player.seekPreview = null;
+    },
+    schedulePlayerControls() {
+      clearTimeout(this.controlsTimer);
+      if (this.player.playing)
+        this.controlsTimer = setTimeout(() => {
+          this.player.controls = false;
+        }, 4000);
+    },
+    updateVideo() {
+      const v = this.$refs.video;
+      if (!v) return;
+      this.player.current = v.currentTime;
+      this.player.duration = Number.isFinite(v.duration) ? v.duration : 0;
+      this.player.playing = !v.paused && !v.ended;
+      this.player.buffered = v.buffered.length
+        ? v.buffered.end(v.buffered.length - 1)
+        : 0;
+      if (!this.player.playing) {
+        this.player.controls = true;
+        this.pointerUpBoost();
+      }
+    },
+    toggleVideo() {
+      const v = this.$refs.video;
+      if (!v) return;
+      this.pointerUpBoost();
+      if (v.paused) v.play().catch(() => {});
+      else v.pause();
+      this.schedulePlayerControls();
+    },
+    seekVideo(e) {
+      if (this.$refs.video)
+        this.$refs.video.currentTime = Number(e.target.value);
+      this.player.controls = true;
+      this.schedulePlayerControls();
+    },
+    videoTime(n) {
+      const s = Math.max(0, Math.floor(n || 0));
+      return (
+        (s >= 3600 ? Math.floor(s / 3600) + ":" : "") +
+        String(Math.floor(s / 60) % 60).padStart(2, "0") +
+        ":" +
+        String(s % 60).padStart(2, "0")
+      );
     },
     async fullscreen() {
       try {
@@ -482,6 +685,9 @@ createApp({
         const v = this.$refs.video;
         v.paused ? v.play().catch(() => {}) : v.pause();
       }
+    },
+    downloadSpeedLabel(d) {
+      return d.speed > 0 ? this.fmtSize(d.speed) + "/s" : "等待数据…";
     },
     refreshNative() {
       if (!this.native) return;
@@ -558,6 +764,10 @@ createApp({
     };
     window.addEventListener("keydown", this.key);
     window.addEventListener("pointermove", this.pointerMove, { passive: true });
+    window.addEventListener("pointerup", this.pointerUp);
+    window.addEventListener("pointercancel", this.pointerUp);
+    window.addEventListener("blur", this.cancelVideoGesture);
+    document.addEventListener("visibilitychange", this.cancelVideoGesture);
     window.addEventListener("lanfileschanged", () => {
       this.load(true);
       this.refreshNative();
@@ -579,14 +789,21 @@ createApp({
     this.refreshNative();
     this.pollTimer = setInterval(() => {
       this.discover();
-      if (this.view === "downloads") this.refreshNative();
     }, 4000);
+    this.downloadsTimer = setInterval(() => {
+      if (this.view === "downloads") this.refreshNative();
+    }, 1000);
     await this.load();
   },
   beforeUnmount() {
     clearInterval(this.pollTimer);
+    clearInterval(this.downloadsTimer);
     this.closePlayer();
     window.removeEventListener("keydown", this.key);
     window.removeEventListener("pointermove", this.pointerMove);
+    window.removeEventListener("pointerup", this.pointerUp);
+    window.removeEventListener("pointercancel", this.pointerUp);
+    window.removeEventListener("blur", this.cancelVideoGesture);
+    document.removeEventListener("visibilitychange", this.cancelVideoGesture);
   },
 }).mount("#app");

@@ -1,5 +1,6 @@
 """Isolated UI fixture: never changes the user's config or media library."""
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 import sys
 
@@ -15,6 +16,15 @@ backend.CONFIG_PATH = fixture.parent / "ui-config.json"
 backend.THUMBNAIL_DIR = fixture.parent / "ui-covers"
 storage.DB_PATH = fixture.parent / "ui-progress.db"
 os.environ["FB_PORT"] = "8876"
+
+
+@asynccontextmanager
+async def fixture_lifespan(application):
+    # UI fixtures must never advertise themselves as the user's real desktop.
+    yield
+
+
+backend.app.router.lifespan_context = fixture_lifespan
 
 if __name__ == "__main__":
     import uvicorn

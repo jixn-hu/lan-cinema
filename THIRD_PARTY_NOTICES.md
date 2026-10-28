@@ -12,6 +12,7 @@ their own licenses and notices:
 | python-zeroconf | LGPL-2.1-or-later | https://github.com/python-zeroconf/python-zeroconf |
 | NanoHTTPD | BSD-3-Clause | https://github.com/NanoHttpd/nanohttpd |
 | AndroidX Media3 | Apache-2.0 | https://github.com/androidx/media |
+| Robolectric (tests only) | MIT | https://github.com/robolectric/robolectric |
 
 Vue's copyright and license header are preserved in `static/vue.global.prod.js`.
 Python dependencies are installed separately. FFmpeg is optional and is not

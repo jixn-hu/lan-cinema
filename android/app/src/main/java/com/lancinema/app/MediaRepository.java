@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import androidx.media3.common.MediaItem;
 import androidx.media3.database.StandaloneDatabaseProvider;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -21,7 +22,9 @@ import androidx.media3.exoplayer.scheduler.Requirements;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -46,6 +49,17 @@ final class MediaRepository {
   final DownloadManager downloads;
   final DownloadNotificationHelper notifications;
   final File directory;
+  final Map<String, Download> liveDownloads = new ConcurrentHashMap<>();
+  final Map<String, Long> downloadSpeeds = new ConcurrentHashMap<>();
+  final Map<String, DownloadSpeed> speedMeters = new HashMap<>();
+  volatile boolean waitingForNetwork;
+  final Runnable speedTick =
+      new Runnable() {
+        @Override
+        public void run() {
+          sampleDownloads();
+        }
+      };
 
   MediaRepository(CinemaApp app) {
     this.app = app;
@@ -75,7 +89,28 @@ final class MediaRepository {
     downloads.addListener(
         new DownloadManager.Listener() {
           @Override
+          public void onInitialized(DownloadManager manager) {
+            monitorSpeed();
+          }
+
+          @Override
+          public void onDownloadChanged(
+              DownloadManager manager, Download download, Exception error) {
+            monitorSpeed();
+          }
+
+          @Override
+          public void onRequirementsStateChanged(
+              DownloadManager manager, Requirements requirements, int notMet) {
+            waitingForNetwork = notMet != 0;
+            monitorSpeed();
+          }
+
+          @Override
           public void onDownloadRemoved(DownloadManager manager, Download download) {
+            liveDownloads.remove(download.request.id);
+            downloadSpeeds.remove(download.request.id);
+            speedMeters.remove(download.request.id);
             pinned.remove(download.request.id);
             app.getSharedPreferences("media", 0)
                 .edit()
@@ -85,6 +120,33 @@ final class MediaRepository {
         });
     downloads.resumeDownloads();
     notifications = new DownloadNotificationHelper(app, CHANNEL);
+  }
+
+  private void monitorSpeed() {
+    main.removeCallbacks(speedTick);
+    main.post(speedTick);
+  }
+
+  private void sampleDownloads() {
+    boolean running = false;
+    Set<String> ids = new HashSet<>();
+    long now = SystemClock.elapsedRealtime();
+    for (Download download : downloads.getCurrentDownloads()) {
+      String id = download.request.id;
+      ids.add(id);
+      liveDownloads.put(id, download);
+      boolean active = download.state == Download.STATE_DOWNLOADING && !waitingForNetwork;
+      running |= active;
+      downloadSpeeds.put(
+          id,
+          speedMeters
+              .computeIfAbsent(id, key -> new DownloadSpeed())
+              .update(download.getBytesDownloaded(), now, active));
+    }
+    liveDownloads.keySet().retainAll(ids);
+    downloadSpeeds.keySet().retainAll(ids);
+    speedMeters.keySet().retainAll(ids);
+    if (running) main.postDelayed(speedTick, 1000);
   }
 
   static String key(String url) {
@@ -176,7 +238,8 @@ final class MediaRepository {
     JSONArray out = new JSONArray();
     try (DownloadCursor cursor = downloads.getDownloadIndex().getDownloads()) {
       while (cursor.moveToNext()) {
-        Download d = cursor.getDownload();
+        Download stored = cursor.getDownload();
+        Download d = liveDownloads.getOrDefault(stored.request.id, stored);
         JSONObject info = new JSONObject(new String(d.request.data, StandardCharsets.UTF_8));
         String[] states = {"等待下载", "暂停", "下载中", "已完成", "下载失败，请检查网络或可用空间", "移除中", "重新下载"};
         out.put(
@@ -187,10 +250,20 @@ final class MediaRepository {
                 .put("type", info.optString("type", "video"))
                 .put("bytes", d.getBytesDownloaded())
                 .put("total", d.contentLength)
+                .put(
+                    "speed",
+                    d.state == Download.STATE_DOWNLOADING
+                        ? downloadSpeeds.getOrDefault(d.request.id, 0L)
+                        : 0L)
+                .put("downloading", d.state == Download.STATE_DOWNLOADING)
                 .put("complete", d.state == Download.STATE_COMPLETED)
                 .put(
                     "paused", d.state == Download.STATE_STOPPED || d.state == Download.STATE_FAILED)
-                .put("status", d.state >= 0 && d.state < states.length ? states[d.state] : "等待中"));
+                .put(
+                    "status",
+                    waitingForNetwork && d.state == Download.STATE_QUEUED
+                        ? "等待网络连接"
+                        : d.state >= 0 && d.state < states.length ? states[d.state] : "等待中"));
       }
     } catch (Exception ignored) {
     }

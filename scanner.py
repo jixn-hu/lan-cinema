@@ -53,6 +53,11 @@ class FileScanner:
             return self._scan()
 
     def find(self, identifier: str) -> FileInfo | None:
+        # Streaming/cover requests must not walk every shared directory again after TTL.
+        # The HTTP handler revalidates containment, existence and the file revision.
+        target = self._index.get(identifier)
+        if target is not None:
+            return target
         with self._lock:
             self._scan()
             return self._index.get(identifier)
@@ -69,11 +74,14 @@ class FileScanner:
         for root in self._dirs:
             if not os.path.isdir(root):
                 continue  # 目录不存在/不可读：跳过并继续其他根目录
-            for dirpath, _dirnames, filenames in os.walk(root):
+            real_root = os.path.realpath(root)
+            for dirpath, dirnames, filenames in os.walk(root):
+                # Check directories once; don't resolve the whole root three times per file.
+                dirnames[:] = [name for name in dirnames if self._contained(real_root, os.path.join(dirpath, name))]
                 for fname in filenames:
                     full = os.path.join(dirpath, fname)
                     try:
-                        if not os.path.commonpath([os.path.realpath(root), os.path.realpath(full)]) == os.path.realpath(root):
+                        if os.path.islink(full) and not self._contained(real_root, full):
                             continue
                         st = os.stat(full)
                     except (OSError, ValueError):
@@ -92,5 +100,12 @@ class FileScanner:
                     )
         self._cache = files
         self._index = {f.id: f for f in files}
-        self._cached_at = now
+        self._cached_at = time.time()
         return files
+
+    @staticmethod
+    def _contained(root: str, path: str) -> bool:
+        try:
+            return os.path.commonpath([root, os.path.realpath(path)]) == root
+        except (OSError, ValueError):
+            return False

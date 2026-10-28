@@ -247,7 +247,12 @@
               <p>
                 {{ d.status }} · {{ fmtSize(d.bytes) }}
                 <span v-if="d.total>0">/ {{ fmtSize(d.total) }}</span>
-                <span v-if="d.speed>0">· {{ fmtSize(d.speed) }}/s</span>
+                <span v-if="d.total>0" class="download-percent"
+                  >· {{ Math.min(100,d.bytes/d.total*100).toFixed(1) }}%</span
+                >
+                <span v-if="d.downloading" class="download-speed"
+                  >{{ downloadSpeedLabel(d) }}</span
+                >
               </p>
               <progress
                 v-if="!d.complete"
@@ -383,21 +388,91 @@
             @pointerdown="pointerDown"
             @pointerup="pointerUp"
             @pointercancel="pointerUp"
-            @pointerleave="pointerUp"
-            @wheel.prevent="zoomBy($event.deltaY<0?.1:-.1)"
+            @lostpointercapture="pointerUp"
+            @wheel.prevent="zoomBy($event.deltaY<0?.1:-.1,$event)"
           >
             <video
               ref="video"
-              controls
               autoplay
               playsinline
               preload="metadata"
               @ended="onEnded"
-              :style="{objectFit:player.fit,transform:'scale('+player.zoom+')'}"
-            ></video
-            ><span v-if="player.boost" class="boost"
-              >▶▶ {{ boostRate }}× 加速中</span
+              @timeupdate="updateVideo"
+              @durationchange="updateVideo"
+              @progress="updateVideo"
+              @play="updateVideo();schedulePlayerControls()"
+              @pause="updateVideo"
+              @waiting="player.waiting=true"
+              @playing="player.waiting=false"
+              :style="{objectFit:player.fit,transform:'translate('+player.x+'px,'+player.y+'px) scale('+player.zoom+')'}"
+            ></video>
+            <div class="gesture-plane" aria-hidden="true"></div>
+            <span v-if="player.boost" class="boost"
+              >▶▶ {{ Math.max(boostRate,player.rate) }}× 加速中 ·
+              松开恢复</span
             >
+            <span
+              v-if="player.waiting&&!player.error"
+              class="video-loading"
+              aria-label="正在缓冲"
+            ></span>
+            <div
+              v-if="player.seekPreview!==null"
+              class="cinema-seek-hint"
+              role="status"
+            >
+              <strong>{{ videoTime(player.seekPreview) }}</strong
+              ><span>/ {{ videoTime(player.duration) }} · 松手跳转</span>
+            </div>
+            <div
+              v-show="player.controls"
+              class="cinema-overlay"
+              @pointerdown.stop
+              @pointerup.stop
+            >
+              <div class="cinema-caption">
+                <span>LAN CINEMA</span><span>局域网直连</span>
+              </div>
+              <button
+                class="cinema-play"
+                :aria-label="player.playing?'暂停视频':'播放视频'"
+                @click="toggleVideo"
+              >
+                {{ player.playing?'Ⅱ':'▶' }}
+              </button>
+              <div class="cinema-bottom">
+                <input
+                  class="cinema-timeline"
+                  aria-label="播放进度"
+                  type="range"
+                  min="0"
+                  :max="player.duration||1"
+                  step="0.1"
+                  :value="player.seekPreview===null?player.current:player.seekPreview"
+                  @input="seekVideo"
+                  :style="{background:'linear-gradient(to right,#c9f591 '+(player.current/(player.duration||1)*100)+'%,#ffffff66 '+(player.current/(player.duration||1)*100)+'%,#ffffff66 '+(player.buffered/(player.duration||1)*100)+'%,#ffffff33 '+(player.buffered/(player.duration||1)*100)+'%)'}"
+                />
+                <div class="cinema-toolbar">
+                  <button aria-label="快退10秒" @click="seek(-10)">−10s</button
+                  ><button aria-label="快进10秒" @click="seek(10)">+10s</button>
+                  <span class="cinema-time"
+                    >{{ videoTime(player.current) }}
+                    <em>/ {{ videoTime(player.duration) }}</em></span
+                  >
+                  <select
+                    aria-label="全屏播放倍速"
+                    v-model.number="player.rate"
+                    @change="setRate"
+                  >
+                    <option v-for="s in [.5,.75,1,1.25,1.5,2,3]" :value="s">
+                      {{ s }}×
+                    </option>
+                  </select>
+                  <button v-if="player.zoom>1" @click="resetZoom">复位</button
+                  ><button aria-label="切换全屏" @click="fullscreen">⛶</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="player-controls">
             <button @click="seek(-10)">−10 秒</button
@@ -413,7 +488,7 @@
             ><button @click="zoomBy(-.25)">缩小</button
             ><button @click="zoomBy(.25)">放大</button
             ><button
-              @click="player.zoom=1;player.fit=player.fit==='contain'?'cover':'contain'"
+              @click="resetZoom();player.fit=player.fit==='contain'?'cover':'contain'"
             >
               {{ player.fit==='contain'?'填满':'适应' }}</button
             ><button @click="player.expanded=!player.expanded">
@@ -425,7 +500,7 @@
             <p v-if="player.error" class="error">{{ player.error }}</p>
             <p>
               {{ fmtSize(player.file.size) }} · {{ Math.round(player.zoom*100)
-              }}% · 长按画面临时加速，滚轮或双指缩放
+              }}% · 长按加速，松手恢复；双指在触摸处放大，放大后可拖动
             </p>
             <p>
               空格暂停 / 继续，← → 快退 / 快进，Esc
