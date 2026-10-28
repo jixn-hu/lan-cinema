@@ -1,5 +1,6 @@
 """局域网文件浏览器后端：REST API + 静态页面托管。"""
 import json
+import logging
 import mimetypes
 import os
 import socket
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,7 @@ BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
 THUMBNAIL_DIR = BASE_DIR / ".thumbnail_cache"
 FILE_CHUNK_SIZE = 1024 * 1024
+APP_VERSION = "1.3.0"
 
 DEFAULT_CONFIG = {"dirs": []}
 
@@ -60,6 +62,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "H
 scanner = FileScanner(load_config().get("dirs", []))
 
 
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception):
+    logging.getLogger("uvicorn.error").error("Request failed: %s %s", request.method, request.url.path, exc_info=exc)
+    # ServerErrorMiddleware sits outside CORS. Keep unexpected failures readable
+    # by the App instead of masking HTTP 500 as an unreachable computer.
+    return JSONResponse(status_code=500, content={"detail": "源设备处理请求失败，请查看源设备服务日志后重试"},
+                        headers={"Access-Control-Allow-Origin": "*"})
+
+
 class DirectoryBody(BaseModel):
     path: str
 
@@ -90,8 +101,8 @@ def access_urls(request: Request):
 
 @app.get("/api/device")
 def device_info():
-    return {"id": DEVICE_ID, "name": socket.gethostname(), "platform": "desktop", "version": 1,
-            "features": ["range", "progress", "download", "discovery", "delete", "changes"]}
+    return {"id": DEVICE_ID, "name": socket.gethostname(), "platform": "desktop", "version": 1, "appVersion": APP_VERSION,
+            "features": ["range", "progress", "download", "discovery", "delete", "changes", "file-info"]}
 
 
 @app.get("/api/changes")
@@ -185,6 +196,19 @@ class DeleteFileBody(BaseModel):
     mtime: float = Field(ge=0, allow_inf_nan=False)
 
 
+@app.get("/api/file/{file_id}")
+def file_info(file_id: str):
+    target, full_path = _find_file(file_id)
+    try:
+        stat = full_path.stat()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="收藏的源视频已删除或停止共享")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="源设备无法读取该视频，请检查文件权限")
+    return {"id": target.id, "name": target.name, "size": stat.st_size, "mtime": stat.st_mtime,
+            "type": target.type, "dir": target.dir, "path": target.path}
+
+
 @app.delete("/api/file/{file_id}")
 def delete_file(file_id: str, body: DeleteFileBody):
     target, full_path = _find_file(file_id)
@@ -198,8 +222,15 @@ def delete_file(file_id: str, body: DeleteFileBody):
         raise HTTPException(status_code=403, detail="源设备不允许删除该文件，请检查文件权限或是否正被占用")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="文件已删除")
+    except OSError:
+        raise HTTPException(status_code=409, detail="源设备无法删除该文件，请检查文件占用、磁盘状态或权限")
     scanner.discard(file_id)
-    save_progress(file_id, 0)
+    try:
+        save_progress(file_id, 0)
+    except Exception:
+        # Deletion already succeeded. Failure to clean old resume metadata must
+        # not report a failed deletion or invite another destructive request.
+        logging.getLogger("uvicorn.error").exception("File deleted; progress cleanup failed")
     return {"ok": True, "revision": scanner.revision}
 
 

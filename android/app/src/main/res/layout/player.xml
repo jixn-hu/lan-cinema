@@ -33,6 +33,7 @@
    <TextView android:id="@+id/player_speed" style="@style/PlayerChip" android:text="@string/player_speed" android:contentDescription="@string/player_speed_label" />
    <TextView android:id="@+id/player_next" style="@style/PlayerChip" android:text="下一集" />
    <TextView android:id="@+id/player_playlist" style="@style/PlayerChip" android:text="选集" />
+   <TextView android:id="@+id/player_favorite" style="@style/PlayerChip" android:text="☆ 收藏" />
    <TextView android:id="@+id/player_fit" style="@style/PlayerChip" android:text="@string/player_fit" android:contentDescription="@string/player_fit_label" />
    <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
    <TextView android:id="@+id/player_reset" style="@style/PlayerChip" android:text="@string/player_reset" android:visibility="gone" />

@@ -71,7 +71,7 @@ with sync_playwright() as p:
     page.get_by_label("设备地址", exact=True).fill(BASE)
     page.get_by_role("button", name="连接", exact=True).click()
     page.get_by_role("dialog", name="设置与共享").wait_for(state="hidden")
-    assert page.locator(".card").count() == 2
+    page.wait_for_function("document.querySelectorAll('.card').length === 2")
     page.set_viewport_size({"width":390,"height":844})
     page.screenshot(path=str(ARTIFACTS / "mobile-web.png"), full_page=True)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

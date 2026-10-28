@@ -19,7 +19,7 @@ import uvicorn
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 os.environ["FB_PORT"] = str(PORT)
-from app import app
+from app import app, APP_VERSION
 
 # 设置环境变量 FB_TOKEN 后启用访问令牌校验；不设则保持原样（局域网内不受影响）
 TOKEN = os.environ.get("FB_TOKEN", "").strip()
@@ -83,7 +83,7 @@ class TokenGate:
         self.inner = inner
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not TOKEN:
+        if scope["type"] != "http" or not TOKEN or scope.get("method") == "OPTIONS":
             await self.inner(scope, receive, send)
             return
 
@@ -109,16 +109,19 @@ class TokenGate:
                         await self.inner(scope, receive, send)
                         return
 
-        body = (
+        is_api = scope.get("path", "").startswith("/api/")
+        detail = "源设备要求访问令牌，请使用带 ?t=访问令牌的完整地址重新连接"
+        body = (json.dumps({"detail": detail}, ensure_ascii=False) if is_api else (
             "<meta charset='utf-8'><h2>需要访问令牌</h2>"
             "<p>请在网址后面加上 <code>?t=你的令牌</code>，只需一次，之后浏览器会记住。</p>"
-        ).encode()
+        )).encode()
         await send({
             "type": "http.response.start",
             "status": 403,
             "headers": [
-                (b"content-type", b"text/html; charset=utf-8"),
+                (b"content-type", b"application/json; charset=utf-8" if is_api else b"text/html; charset=utf-8"),
                 (b"content-length", str(len(body)).encode()),
+                (b"access-control-allow-origin", b"*"),
             ],
         })
         await send({"type": "http.response.body", "body": body})
@@ -128,7 +131,7 @@ def banner(addrs_v4, addrs_v6):
     suffix = f"?t={TOKEN}" if TOKEN else ""
     line = "-" * 58
     print(line)
-    print(f"  文件浏览器已启动，端口 {PORT}")
+    print(f"  局域影库 v{APP_VERSION} 已启动，端口 {PORT}")
     if TOKEN:
         print("  已启用访问令牌：链接里已带 ?t=…，首次打开后浏览器会记住")
     print(line)

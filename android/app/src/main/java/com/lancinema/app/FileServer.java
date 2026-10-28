@@ -24,8 +24,12 @@ final class FileServer extends NanoHTTPD {
     Response response;
     try {
       response = route(session);
-    } catch (FileNotFoundException | SecurityException e) {
-      response = json(Response.Status.NOT_FOUND, "文件已移除或授权失效");
+    } catch (FileNotFoundException e) {
+      response = json(Response.Status.NOT_FOUND, "文件已移除或已停止共享");
+    } catch (SecurityException e) {
+      response = json(Response.Status.FORBIDDEN, "文件授权失效，请在源 App 重新选择共享文件");
+    } catch (org.json.JSONException e) {
+      response = json(Response.Status.BAD_REQUEST, "请求数据无效，请刷新列表后重试");
     } catch (Exception e) {
       response = json(Response.Status.INTERNAL_ERROR, "请求失败，请刷新后重试");
     }
@@ -50,11 +54,18 @@ final class FileServer extends NanoHTTPD {
               .put("name", android.os.Build.MODEL)
               .put("platform", "android")
               .put("version", 1)
+              .put("appVersion", BuildConfig.VERSION_NAME)
               .put(
                   "features",
                   new JSONArray(
                       Arrays.asList(
-                          "range", "progress", "download", "discovery", "delete", "changes"))));
+                          "range",
+                          "progress",
+                          "download",
+                          "discovery",
+                          "delete",
+                          "changes",
+                          "file-info"))));
     if (path.equals("/api/changes"))
       return ok(new JSONObject().put("revision", app.shares.revision()));
     if (path.equals("/api/devices"))
@@ -115,6 +126,16 @@ final class FileServer extends NanoHTTPD {
     }
     if (path.startsWith("/api/file/")) {
       String[] parts = path.split("/");
+      if (parts.length == 4 && s.getMethod() == Method.GET) {
+        for (JSONObject f : app.shares.files())
+          if (f.optString("id").equals(parts[3])) {
+            JSONObject safe = app.shares.metadata(Uri.parse(f.getString("uri")));
+            safe.remove("uri");
+            safe.remove("mime");
+            return ok(safe);
+          }
+        return json(Response.Status.NOT_FOUND, "收藏的视频已被删除或停止共享");
+      }
       if (parts.length == 4 && s.getMethod() == Method.DELETE) {
         Map<String, String> body = new HashMap<>();
         s.parseBody(body);

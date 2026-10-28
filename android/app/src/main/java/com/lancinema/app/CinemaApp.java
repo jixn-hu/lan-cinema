@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 public final class CinemaApp extends Application implements Application.ActivityLifecycleCallbacks {
   final ExecutorService io = Executors.newFixedThreadPool(4);
   ShareStore shares;
+  FavoriteStore favorites;
   FileServer server;
   PeerDiscovery discovery;
   String deviceId;
@@ -31,6 +32,7 @@ public final class CinemaApp extends Application implements Application.Activity
       getSharedPreferences("device", 0).edit().putString("id", deviceId).apply();
     }
     shares = new ShareStore(this);
+    favorites = new FavoriteStore(this);
     registerActivityLifecycleCallbacks(this);
   }
 

@@ -30,7 +30,13 @@ public class PlayerQueueTest {
       app.playlist.put(
           new JSONObject()
               .put("url", "http://127.0.0.1:9/episode" + i + ".mp4")
-              .put("name", "第" + i + "集"));
+              .put("name", "第" + i + "集")
+              .put(
+                  "favorite",
+                  new JSONObject()
+                      .put("key", "pc:episode" + i)
+                      .put("file", new JSONObject().put("id", "episode" + i))));
+    app.getSharedPreferences("favorites", 0).edit().clear().commit();
     Intent intent = new Intent().putExtra("video", app.playlist.getJSONObject(0).toString());
     ActivityController<PlayerActivity> controller =
         Robolectric.buildActivity(PlayerActivity.class, intent).setup().visible();
@@ -38,6 +44,10 @@ public class PlayerQueueTest {
     try {
       PlayerActivity activity = controller.get();
       assertTrue(activity.findViewById(R.id.player_next).isEnabled());
+      activity.findViewById(R.id.player_favorite).performClick();
+      assertTrue(app.favorites.contains("pc:episode1"));
+      assertEquals(
+          "★ 已收藏", ((TextView) activity.findViewById(R.id.player_favorite)).getText().toString());
       Object oldPlayer = ReflectionHelpers.getField(activity, "player");
       activity.findViewById(R.id.player_next).performClick();
       ShadowLooper.idleMainLooper();
@@ -45,6 +55,13 @@ public class PlayerQueueTest {
           "第2集", ((TextView) activity.findViewById(R.id.player_title)).getText().toString());
       assertNotSame(oldPlayer, ReflectionHelpers.getField(activity, "player"));
       assertFalse(activity.findViewById(R.id.player_next).isEnabled());
+      assertEquals(
+          "☆ 收藏", ((TextView) activity.findViewById(R.id.player_favorite)).getText().toString());
+      activity.findViewById(R.id.player_favorite).performClick();
+      assertTrue(app.favorites.contains("pc:episode2"));
+      activity.findViewById(R.id.player_favorite).performClick();
+      assertFalse(app.favorites.contains("pc:episode2"));
+      assertTrue(app.favorites.contains("pc:episode1"));
       Bundle state = new Bundle();
       controller.saveInstanceState(state).pause().stop().destroy();
       restored = Robolectric.buildActivity(PlayerActivity.class, intent).setup(state).visible();

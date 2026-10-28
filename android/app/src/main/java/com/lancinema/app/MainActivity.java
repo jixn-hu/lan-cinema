@@ -172,6 +172,21 @@ public final class MainActivity extends Activity {
     }
 
     @JavascriptInterface
+    public String favorites() {
+      return authorized() ? app.favorites.all().toString() : "[]";
+    }
+
+    @JavascriptInterface
+    public String toggleFavorite(String json) {
+      if (!authorized()) return "[]";
+      try {
+        return app.favorites.toggle(new JSONObject(json)).toString();
+      } catch (Exception e) {
+        return app.favorites.all().toString();
+      }
+    }
+
+    @JavascriptInterface
     public String cacheInfo() {
       return authorized() ? app.media().info().toString() : "{}";
     }

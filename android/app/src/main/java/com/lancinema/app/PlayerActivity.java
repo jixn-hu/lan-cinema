@@ -155,6 +155,8 @@ public final class PlayerActivity extends Activity {
     click(R.id.player_more, this::settingsSheet);
     click(R.id.player_next, this::playNext);
     click(R.id.player_playlist, this::playlistSheet);
+    click(R.id.player_favorite, this::toggleFavorite);
+    updateFavorite();
     updateQueueButtons();
     click(
         R.id.player_reset,
@@ -262,6 +264,27 @@ public final class PlayerActivity extends Activity {
         .setText("选集 " + (queueIndex + 1) + "/" + queue.length());
   }
 
+  private void updateFavorite() {
+    JSONObject bookmark = info.optJSONObject("favorite");
+    TextView button = findViewById(R.id.player_favorite);
+    button.setVisibility(bookmark == null ? View.GONE : View.VISIBLE);
+    if (bookmark != null) {
+      boolean saved = app.favorites.contains(bookmark.optString("key"));
+      button.setText(saved ? "★ 已收藏" : "☆ 收藏");
+      button.setTextColor(saved ? ACCENT : Color.WHITE);
+      button.setContentDescription(saved ? "取消收藏视频" : "收藏视频");
+    }
+  }
+
+  private void toggleFavorite() {
+    JSONObject bookmark = info.optJSONObject("favorite");
+    if (bookmark != null) {
+      app.favorites.toggle(bookmark);
+      updateFavorite();
+      message(app.favorites.contains(bookmark.optString("key")) ? "已加入收藏视频" : "已取消收藏", true);
+    }
+  }
+
   private void playlistSheet() {
     String[] names = new String[queue.length()];
     for (int i = 0; i < names.length; i++)
@@ -293,6 +316,7 @@ public final class PlayerActivity extends Activity {
         .setText(
             info.optBoolean("offline") ? "LAN CINEMA  /  离线观看" : "LAN CINEMA  /  局域网直连 · 自动缓存");
     updateQueueButtons();
+    updateFavorite();
     startPlayer();
     showControls(true);
   }

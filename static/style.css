@@ -751,6 +751,36 @@ h1 {
   font-size: 12px;
   flex-wrap: wrap;
 }
+.compatibility-hint {
+  color: #efce9c;
+  border: 1px solid #efce9c44;
+  background: #efce9c0c;
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.favorite-button.saved {
+  color: var(--accent, #c9f591);
+}
+.favorite-source {
+  color: var(--muted, #a0aca5);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 10px 0;
+}
+.favorites-bar {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+.favorites-bar input {
+  max-width: 100%;
+}
 .delete-mask {
   z-index: 80;
 }

@@ -27,6 +27,14 @@
           <span>▤</span> 文件库
         </button>
         <button
+          class="nav"
+          :class="{active:view==='favorites'}"
+          @click="showFavorites"
+        >
+          <span>☆</span> 收藏视频
+          <span class="nav-count">{{ favorites.length }}</span>
+        </button>
+        <button
           v-if="native"
           class="nav"
           :class="{active:view==='downloads'}"
@@ -79,7 +87,8 @@
         <header class="topbar">
           <div class="breadcrumb">
             我的空间 <span>/</span> {{
-            view==='downloads'?'下载与缓存':(source?.name||'本机文件库') }}
+            view==='favorites'?'收藏视频':view==='downloads'?'下载与缓存':(source?.name||'本机文件库')
+            }}
           </div>
           <span class="connection"><i></i> {{ devices.length+1 }} 台设备</span
           ><button
@@ -94,12 +103,13 @@
           <div>
             <p class="eyebrow">YOUR FILES, ANY SCREEN.</p>
             <h1>
-              {{ view==='downloads'?'随时看，离线也可以。':'好视频，随处可看。'
+              {{
+              view==='favorites'?'喜欢的，留着慢慢看。':view==='downloads'?'随时看，离线也可以。':'好视频，随处可看。'
               }}
             </h1>
             <p class="description">
               {{
-              view==='downloads'?'完整下载会一直保留，播放缓存按设定空间自动清理。':'在电脑与手机间自由浏览，点开即播，无需来回复制。'
+              view==='favorites'?'把各台设备上的好视频收在一起，下次接着看。':view==='downloads'?'完整下载会一直保留，播放缓存按设定空间自动清理。':'在电脑与手机间自由浏览，点开即播，无需来回复制。'
               }}
             </p>
           </div>
@@ -121,9 +131,14 @@
           >
             {{ d.name }}</button
           ><button @click="openSettings">＋ 连接</button
+          ><button :class="{active:view==='favorites'}" @click="showFavorites">
+            ☆ 收藏</button
           ><button v-if="native" @click="showDownloads">↓ 下载</button>
         </div>
         <template v-if="view==='library'">
+          <p v-if="compatibilityHint" class="compatibility-hint" role="status">
+            {{ compatibilityHint }}
+          </p>
           <div class="library-bar">
             <div class="tabs">
               <button
@@ -224,6 +239,16 @@
                 </div>
                 <div class="file-actions">
                   <button
+                    v-if="f.type==='video'"
+                    class="unshare favorite-button"
+                    :class="{saved:isFavorite(f)}"
+                    :aria-label="(isFavorite(f)?'取消收藏 ':'收藏 ')+f.name"
+                    :aria-pressed="isFavorite(f)"
+                    @click="toggleFavorite(f)"
+                  >
+                    {{ isFavorite(f)?'★ 已收藏':'☆ 收藏' }}
+                  </button>
+                  <button
                     v-if="native&&!source"
                     class="unshare"
                     @click="unshare(f)"
@@ -241,6 +266,73 @@
               </div>
             </article>
           </div>
+        </template>
+        <template v-else-if="view==='favorites'">
+          <div class="results favorites-bar">
+            <span>{{ favorites.length }} 个收藏 · 保存在这台设备</span>
+            <input
+              aria-label="搜索收藏"
+              type="search"
+              v-model="favoriteSearch"
+              placeholder="搜索视频或来源设备…"
+            />
+          </div>
+          <div v-if="!filteredFavorites.length" class="empty">
+            <span>☆</span>
+            <h2>
+              {{ favorites.length?'没有找到这个视频':'喜欢的视频，一键收藏。' }}
+            </h2>
+            <p>
+              在文件卡片或播放器点击收藏。收藏保留来源信息；离线观看请先下载完整视频。
+            </p>
+          </div>
+          <div v-else class="grid">
+            <article
+              v-for="b in filteredFavorites"
+              :key="b.key"
+              class="card favorite-card"
+            >
+              <button
+                class="cover"
+                :disabled="!!openingFavorite"
+                :aria-label="'播放收藏 '+b.file.name"
+                @click="playFavorite(b)"
+              >
+                <span class="cover-fallback">▷</span
+                ><span class="format">{{ extension(b.file.name) }}</span>
+                <span class="play-bubble"
+                  >{{ openingFavorite===b.key?'…':'▶' }}</span
+                >
+              </button>
+              <div class="meta">
+                <h3 :title="b.file.name" @click="playFavorite(b)">
+                  {{ b.file.name }}
+                </h3>
+                <div class="favorite-source" :title="b.deviceName">
+                  {{ b.deviceName }} · {{ fmtSize(b.file.size) }}
+                </div>
+                <div class="file-actions">
+                  <button
+                    class="unshare"
+                    :disabled="!!openingFavorite"
+                    @click="playFavorite(b)"
+                  >
+                    播放
+                  </button>
+                  <button
+                    class="unshare favorite-button saved"
+                    :aria-label="'取消收藏 '+b.file.name"
+                    @click="toggleBookmark(b)"
+                  >
+                    ★ 取消收藏
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+          <p v-if="favorites.length" class="subtle">
+            在线播放需来源设备保持共享。完整下载后会优先离线播放；取消收藏保留视频和下载。
+          </p>
         </template>
         <template v-else>
           <div class="cache-overview">
@@ -608,6 +700,11 @@
             ><button @click="player.expanded=!player.expanded">
               {{ player.expanded?'收起':'展开' }}</button
             ><button @click="fullscreen">全屏</button
+            ><button
+              :aria-pressed="isFavorite(player.file,player.source)"
+              @click="toggleFavorite(player.file,player.source)"
+            >
+              {{ isFavorite(player.file,player.source)?'★ 已收藏':'☆ 收藏' }}</button
             ><button @click="download(player.file,player.source)">下载</button>
           </div>
           <div

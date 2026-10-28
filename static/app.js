@@ -5,6 +5,7 @@ createApp({
       native: !!window.LanCinema,
       view: "library",
       self: {},
+      sourceInfo: null,
       source: null,
       devices: [],
       manuals: JSON.parse(localStorage.getItem("lan-peers") || "[]"),
@@ -32,6 +33,9 @@ createApp({
       cache: {},
       cacheLimit: 20,
       downloads: [],
+      favorites: JSON.parse(localStorage.getItem("lan-favorites") || "[]"),
+      favoriteSearch: "",
+      openingFavorite: "",
       downloadSort: localStorage.getItem("lan-download-sort") || "added_desc",
       refreshInterval: Number(localStorage.getItem("lan-refresh-seconds")) || 0,
       lastRefresh: 0,
@@ -41,6 +45,7 @@ createApp({
       deleting: false,
       playQueue: [],
       queueSource: null,
+      queueProgress: {},
       playlistOpen: false,
       tabs: [
         { value: "all", label: "全部" },
@@ -85,6 +90,17 @@ createApp({
     };
   },
   computed: {
+    filteredFavorites() {
+      const query = this.favoriteSearch.trim().toLocaleLowerCase();
+      return this.favorites.filter((b) =>
+        (b.file.name + " " + b.deviceName).toLocaleLowerCase().includes(query),
+      );
+    },
+    compatibilityHint() {
+      if (this.sourceInfo && !this.sourceInfo.features?.includes("delete"))
+        return this.upgradeHint(this.sourceInfo);
+      return "";
+    },
     sortedDownloads() {
       const [key, direction] = this.downloadSort.split("_");
       const value = (d) =>
@@ -139,6 +155,40 @@ createApp({
       if (token) result.searchParams.set("t", token);
       return result.href;
     },
+    upgradeHint(info) {
+      return info?.platform === "android"
+        ? "源设备上的 App 版本过旧，不支持删除。请先更新源 App 并重新打开。"
+        : "电脑当前运行的共享服务版本过旧，不支持删除。请更新电脑端，并关闭旧服务窗口后重新运行 run.cmd。";
+    },
+    async connectionFailure(path, options, source, address) {
+      if (
+        options.method &&
+        !["GET", "HEAD"].includes(options.method.toUpperCase())
+      ) {
+        const probe = new AbortController();
+        const timer = setTimeout(() => probe.abort(), 3000);
+        try {
+          const response = await fetch(this.apiURL("/api/device", source), {
+            signal: probe.signal,
+          });
+          if (response.ok) {
+            const info = await response.json();
+            if (
+              options.method.toUpperCase() === "DELETE" &&
+              !info.features?.includes("delete")
+            )
+              return this.upgradeHint(info);
+            return `源设备 ${address} 可以访问，但操作请求被拒绝或响应中断。请更新并重新启动源设备的共享服务后重试。`;
+          }
+          if (response.status === 403)
+            return "源设备拒绝访问，请检查连接地址中的访问令牌";
+        } catch {
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      return `无法连接源设备 ${address}。请确认共享服务已启动、设备仍连接同一局域网，并检查电脑防火墙。`;
+    },
     async request(path, options = {}, source = this.source) {
       const url = this.apiURL(path, source);
       const controller = new AbortController();
@@ -146,20 +196,37 @@ createApp({
         () => controller.abort(),
         path.startsWith("/api/files") ? 60000 : 12000,
       );
+      let received = false;
       try {
         const response = await fetch(url, {
           ...options,
           signal: controller.signal,
         });
+        received = true;
         if (!response.ok) {
           let info;
           try {
             info = await response.json();
           } catch {}
-          throw Error(
-            info?.detail ||
-              `连接失败（${response.status}），请检查设备地址或访问令牌`,
+          const detail = Array.isArray(info?.detail)
+            ? info.detail.map((x) => x.msg).join("；")
+            : info?.detail;
+          const error = Error(
+            typeof detail === "string" &&
+              !["Not Found", "Method Not Allowed"].includes(detail)
+              ? detail
+              : response.status === 403
+                ? "源设备拒绝操作，请检查访问令牌或文件权限"
+                : response.status === 404
+                  ? "文件或接口不存在，请刷新列表；旧版共享服务请更新并重启"
+                  : response.status === 405
+                    ? "源设备不支持该操作，请更新并重启共享服务"
+                    : response.status >= 500
+                      ? "源设备处理请求失败，请查看源设备的服务日志后重试"
+                      : `操作失败（${response.status}），请刷新后重试`,
           );
+          error.status = response.status;
+          throw error;
         }
         const data = await response.json();
         if (Array.isArray(data))
@@ -167,13 +234,26 @@ createApp({
         return data;
       } catch (error) {
         const address = new URL(url).origin;
+        if (
+          controller.signal.aborted &&
+          options.method &&
+          !["GET", "HEAD"].includes(options.method.toUpperCase())
+        )
+          throw Error(
+            (await this.connectionFailure(path, options, source, address)) +
+              " 请求超时后请先刷新列表，确认操作结果。",
+          );
         if (controller.signal.aborted)
           throw Error(
             `连接 ${address} 超时。请确认电脑服务仍在运行、地址属于当前 Wi-Fi，并允许防火墙的局域网访问`,
           );
-        if (error instanceof TypeError)
+        if (error instanceof TypeError && !received)
           throw Error(
-            `无法访问 ${address}。请检查共享服务、电脑防火墙和设备地址；自动发现后也可能选到虚拟网卡，请尝试手动连接电脑的实际局域网 IP`,
+            await this.connectionFailure(path, options, source, address),
+          );
+        if (error instanceof SyntaxError)
+          throw Error(
+            "源设备返回了无法识别的数据，请检查访问令牌或更新并重启共享服务",
           );
         throw error;
       } finally {
@@ -216,6 +296,12 @@ createApp({
     async selectDevice(d) {
       this.closePlayer();
       this.source = d;
+      this.sourceInfo = null;
+      this.request("/api/device", {}, d)
+        .then((info) => {
+          if (this.source === d) this.sourceInfo = info;
+        })
+        .catch(() => {});
       this.libraryRevision = "";
       this.view = "library";
       this.currentDir = "";
@@ -292,6 +378,9 @@ createApp({
       if (!target || this.deleting) return;
       this.deleting = true;
       try {
+        const info = await this.request("/api/device", {}, target.source);
+        if (!info.features?.includes("delete"))
+          throw Error(this.upgradeHint(info));
         await this.request(
           "/api/file/" + target.file.id,
           {
@@ -434,6 +523,110 @@ createApp({
         source,
       );
     },
+    favoriteKey(f, source = this.source) {
+      return (source?.id || this.self.id || "local") + ":" + f.id;
+    },
+    bookmark(f, source = this.source) {
+      return {
+        key: this.favoriteKey(f, source),
+        file: { ...f },
+        source: source
+          ? {
+              id: source.id,
+              name: source.name,
+              url: source.url,
+              platform: source.platform,
+            }
+          : null,
+        deviceId: source?.id || this.self.id,
+        deviceName: source?.name || this.self.name || "本机",
+        url: this.mediaURL(f, source),
+        added: Date.now(),
+      };
+    },
+    isFavorite(f, source = this.source) {
+      return this.favorites.some((b) => b.key === this.favoriteKey(f, source));
+    },
+    toggleBookmark(bookmark) {
+      try {
+        const exists = this.favorites.some((b) => b.key === bookmark.key);
+        if (
+          this.native &&
+          typeof window.LanCinema.toggleFavorite === "function"
+        ) {
+          this.favorites = JSON.parse(
+            window.LanCinema.toggleFavorite(JSON.stringify(bookmark)),
+          );
+        } else {
+          const next = this.favorites.filter((b) => b.key !== bookmark.key);
+          if (!exists) next.unshift(bookmark);
+          localStorage.setItem("lan-favorites", JSON.stringify(next));
+          this.favorites = next;
+        }
+        this.notify(exists ? "已取消收藏" : "已收藏，可在“收藏视频”中查看");
+      } catch (e) {
+        this.notify("收藏保存失败：" + e.message);
+      }
+    },
+    toggleFavorite(f, source = this.source) {
+      this.toggleBookmark(this.bookmark(f, source));
+    },
+    showFavorites() {
+      this.refreshNative();
+      this.view = "favorites";
+    },
+    favoriteSource(b) {
+      if (b.deviceId === this.self.id || !b.source) return null;
+      const latest = this.devices.find((d) => d.id === b.deviceId);
+      if (!latest) return b.source;
+      const url = new URL(latest.url);
+      const token = new URL(b.source.url).searchParams.get("t");
+      if (token && !url.searchParams.has("t")) url.searchParams.set("t", token);
+      return { ...b.source, ...latest, url: url.href };
+    },
+    async playFavorite(b) {
+      if (this.openingFavorite) return;
+      this.openingFavorite = b.key;
+      try {
+        this.refreshNative();
+        const offline = this.downloads.find(
+          (d) => d.complete && (d.favorite?.key === b.key || d.url === b.url),
+        );
+        if (this.native && offline) {
+          this.playDownload(offline);
+          return;
+        }
+        const source = this.favoriteSource(b);
+        const device = await this.request("/api/device", {}, source);
+        if (b.deviceId && device.id !== b.deviceId)
+          throw Error(
+            "此地址已属于其他设备，请连接收藏的来源设备「" +
+              b.deviceName +
+              "」后重试",
+          );
+        const file = device.features?.includes("file-info")
+          ? await this.request("/api/file/" + b.file.id, {}, source)
+          : b.file;
+        this.queueSource = source;
+        this.queueProgress = await this.request(
+          "/api/progress",
+          {},
+          source,
+        ).catch(() => ({}));
+        this.playQueue = this.favorites
+          .filter((x) => x.deviceId === b.deviceId)
+          .map((x) => (x.key === b.key ? file : x.file));
+        this.openItem(file, true);
+      } catch (e) {
+        this.notify(
+          e.status === 404
+            ? "收藏的源视频已删除或停止共享，可取消收藏；已下载的视频仍可离线播放"
+            : e.message,
+        );
+      } finally {
+        this.openingFavorite = "";
+      }
+    },
     download(f, source = this.source) {
       const url = this.mediaURL(f, source);
       if (this.native) {
@@ -444,6 +637,7 @@ createApp({
             id: f.id,
             size: f.size,
             type: f.type,
+            favorite: f.type === "video" ? this.bookmark(f, source) : undefined,
             progressUrl: this.apiURL("/api/progress/" + f.id, source),
           }),
         );
@@ -465,7 +659,8 @@ createApp({
         name: f.name,
         size: f.size,
         type: f.type,
-        position: this.progressMap[f.id] || 0,
+        favorite: this.bookmark(f, source),
+        position: this.queueProgress[f.id] || 0,
         progressUrl: this.apiURL("/api/progress/" + f.id, source),
       };
     },
@@ -473,6 +668,7 @@ createApp({
       if (f.type === "video") {
         if (!keepQueue) {
           this.queueSource = this.source;
+          this.queueProgress = { ...this.progressMap };
           this.playQueue = this.files
             .filter((x) => x.type === "video")
             .sort((a, b) =>
@@ -531,7 +727,7 @@ createApp({
         (this.player.error =
           "这个视频的编码可能不被浏览器支持，可使用安卓 App 或下载后播放。");
       v.onloadedmetadata = () => {
-        const pos = this.progressMap[f.id] || 0;
+        const pos = this.queueProgress[f.id] || 0;
         if (pos > 0 && pos < v.duration) v.currentTime = pos;
       };
       v.playbackRate = this.player.rate;
@@ -544,7 +740,9 @@ createApp({
       if (!f || !v || !Number.isFinite(v.duration)) return;
       const position =
         clear || v.currentTime >= v.duration * 0.98 ? 0 : v.currentTime;
-      this.progressMap[f.id] = position;
+      this.queueProgress[f.id] = position;
+      if ((this.player.source?.id || null) === (this.source?.id || null))
+        this.progressMap[f.id] = position;
       this.request(
         "/api/progress/" + f.id,
         {
@@ -840,6 +1038,8 @@ createApp({
       try {
         this.cache = JSON.parse(window.LanCinema.cacheInfo());
         this.downloads = JSON.parse(window.LanCinema.downloads());
+        if (typeof window.LanCinema.favorites === "function")
+          this.favorites = JSON.parse(window.LanCinema.favorites());
       } catch (e) {
         this.notify(e.message);
       }
@@ -882,6 +1082,7 @@ createApp({
         position: 0,
         offline: x.complete,
         progressUrl: x.progressUrl,
+        favorite: x.favorite,
       });
       window.LanCinema.play(
         JSON.stringify({
@@ -939,7 +1140,10 @@ createApp({
     });
     window.addEventListener("pagehide", () => this.saveProgress());
     this.request("/api/device", {}, null)
-      .then((d) => (this.self = d))
+      .then((d) => {
+        this.self = d;
+        if (!this.source) this.sourceInfo = d;
+      })
       .catch(() => {});
     this.request("/api/access", {}, null)
       .then((d) => (this.accessUrls = d.lan || []))

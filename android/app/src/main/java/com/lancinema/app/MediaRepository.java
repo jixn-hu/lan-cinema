@@ -345,6 +345,7 @@ final class MediaRepository {
                 .put("total", total)
                 .put("added", d.startTimeMs)
                 .put("progressUrl", info.optString("progressUrl"))
+                .put("favorite", info.optJSONObject("favorite"))
                 .put("temporary", false)
                 .put(
                     "speed",
