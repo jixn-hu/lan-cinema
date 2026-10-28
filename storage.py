@@ -48,3 +48,11 @@ def save_progress(file_id: str, position: float):
         conn.commit()
     finally:
         conn.close()
+
+
+def get_progresses() -> dict[str, float]:
+    conn = _connect()
+    try:
+        return dict(conn.execute("SELECT file_id, position FROM progress WHERE position > 0"))
+    finally:
+        conn.close()

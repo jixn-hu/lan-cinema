@@ -2,6 +2,7 @@
 import hashlib
 import os
 import time
+import threading
 from dataclasses import dataclass
 
 VIDEO_EXTS = {
@@ -40,12 +41,27 @@ class FileScanner:
         self._cache: list[FileInfo] | None = None
         self._cached_at: float = 0.0
         self._ttl = 15.0
+        self._lock = threading.RLock()
+        self._index: dict[str, FileInfo] = {}
 
     @property
     def dirs(self) -> list[str]:
         return self._dirs
 
     def scan(self) -> list[FileInfo]:
+        with self._lock:
+            return self._scan()
+
+    def find(self, identifier: str) -> FileInfo | None:
+        with self._lock:
+            self._scan()
+            return self._index.get(identifier)
+
+    def refresh(self):
+        with self._lock:
+            self._cached_at = 0
+
+    def _scan(self) -> list[FileInfo]:
         now = time.time()
         if self._cache is not None and now - self._cached_at < self._ttl:
             return self._cache
@@ -57,8 +73,10 @@ class FileScanner:
                 for fname in filenames:
                     full = os.path.join(dirpath, fname)
                     try:
+                        if not os.path.commonpath([os.path.realpath(root), os.path.realpath(full)]) == os.path.realpath(root):
+                            continue
                         st = os.stat(full)
-                    except OSError:
+                    except (OSError, ValueError):
                         continue
                     rel = os.path.relpath(full, root)
                     files.append(
@@ -73,5 +91,6 @@ class FileScanner:
                         )
                     )
         self._cache = files
+        self._index = {f.id: f for f in files}
         self._cached_at = now
         return files

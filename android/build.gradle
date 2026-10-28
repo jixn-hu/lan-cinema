@@ -1,0 +1,6 @@
+plugins { id 'com.android.application' version '8.13.0' apply false }
+// Optional ASCII output directory for Windows toolchains with non-ASCII path bugs.
+if (System.getenv('LAN_CINEMA_BUILD_DIR')) {
+    layout.buildDirectory = file(System.getenv('LAN_CINEMA_BUILD_DIR'))
+    subprojects { layout.buildDirectory = rootProject.layout.buildDirectory.dir(project.name) }
+}

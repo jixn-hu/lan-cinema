@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -12,7 +13,7 @@ def test_load_config_creates_default(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     monkeypatch.setattr(app_module, "CONFIG_PATH", cfg_path)
     cfg = app_module.load_config()
-    assert cfg == {"dirs": [r"D:\迅雷下载\other1"]}
+    assert cfg == {"dirs": []}
     assert cfg_path.exists()
 
 
@@ -43,6 +44,49 @@ def test_dirs_endpoint(tmp_path):
     r = client.get("/api/dirs")
     assert r.status_code == 200
     assert r.json()["dirs"] == [str(tmp_path)]
+
+
+def test_access_endpoint(monkeypatch):
+    monkeypatch.setattr(app_module, "lan_addresses", lambda: ["192.168.1.8", "10.0.0.6"])
+    client = TestClient(app_module.app, base_url="http://testserver:8000")
+    response = client.get("/api/access")
+    assert response.status_code == 200
+    assert response.json() == {
+        "local": "http://127.0.0.1:8000",
+        "lan": ["http://192.168.1.8:8000", "http://10.0.0.6:8000"],
+    }
+
+
+def test_add_and_remove_dir_updates_config(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    monkeypatch.setattr(app_module, "CONFIG_PATH", cfg_path)
+    app_module.scanner = FileScanner([str(first)])
+    client = TestClient(app_module.app)
+
+    added = client.post("/api/dirs", json={"path": str(second)})
+    assert added.status_code == 201
+    assert added.json()["dirs"] == [str(first), str(second)]
+    assert json.loads(cfg_path.read_text(encoding="utf-8")) == {"dirs": [str(first), str(second)]}
+
+    removed = client.request("DELETE", "/api/dirs", json={"path": str(first)})
+    assert removed.status_code == 200
+    assert removed.json()["dirs"] == [str(second)]
+
+
+def test_add_dir_rejects_missing_and_duplicate_dirs(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    monkeypatch.setattr(app_module, "CONFIG_PATH", cfg_path)
+    app_module.scanner = FileScanner([str(existing)])
+    client = TestClient(app_module.app)
+
+    assert client.post("/api/dirs", json={"path": str(tmp_path / "missing")}).status_code == 422
+    assert client.post("/api/dirs", json={"path": str(existing)}).status_code == 409
 
 
 def _setup_scanner(tmp_path):
@@ -128,6 +172,34 @@ def test_stream_download_flag(tmp_path):
     assert "attachment" in r.headers["content-disposition"]
 
 
+def test_download_supports_parallel_range_requests(tmp_path):
+    (tmp_path / "v.mp4").write_bytes(b"0123456789")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "v.mp4")
+
+    first = client.get(
+        f"/api/file/{fid}/stream?download=1",
+        headers={"Range": "bytes=0-3"},
+    )
+    second = client.get(
+        f"/api/file/{fid}/stream?download=1",
+        headers={"Range": "bytes=4-9"},
+    )
+
+    assert first.status_code == second.status_code == 206
+    assert first.content == b"0123"
+    assert second.content == b"456789"
+    assert first.headers["accept-ranges"] == "bytes"
+    assert "attachment" in first.headers["content-disposition"]
+
+
+def test_file_response_uses_large_chunks(tmp_path):
+    path = tmp_path / "large.mp4"
+    path.write_bytes(b"x")
+    assert app_module._file_response(path).chunk_size == 1024 * 1024
+
+
 def test_stream_other_attachment(tmp_path):
     (tmp_path / "d.zip").write_bytes(b"x")
     app_module.scanner = FileScanner([str(tmp_path)])
@@ -141,6 +213,52 @@ def test_stream_404(tmp_path):
     app_module.scanner = FileScanner([str(tmp_path)])
     client = TestClient(app_module.app)
     assert client.get("/api/file/doesnotexist/stream").status_code == 404
+
+
+def test_image_cover_uses_source_image(tmp_path):
+    (tmp_path / "p.png").write_bytes(b"image-data")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "p.png")
+
+    response = client.get(f"/api/file/{fid}/cover")
+
+    assert response.status_code == 200
+    assert response.content == b"image-data"
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.headers["cache-control"] == "public, max-age=86400"
+
+
+def test_video_cover_is_generated_once_and_cached(tmp_path, monkeypatch):
+    (tmp_path / "v.mp4").write_bytes(b"video-data")
+    cache_dir = tmp_path / "covers"
+    app_module.scanner = FileScanner([str(tmp_path)])
+    monkeypatch.setattr(app_module, "THUMBNAIL_DIR", cache_dir)
+    calls = []
+
+    def fake_generate(source, output):
+        calls.append(source)
+        output.write_bytes(b"jpeg-data")
+
+    monkeypatch.setattr(app_module, "_generate_video_cover", fake_generate)
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "v.mp4")
+
+    first = client.get(f"/api/file/{fid}/cover")
+    second = client.get(f"/api/file/{fid}/cover")
+
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content == b"jpeg-data"
+    assert len(calls) == 1
+
+
+def test_other_file_has_no_cover(tmp_path):
+    (tmp_path / "d.txt").write_bytes(b"text")
+    app_module.scanner = FileScanner([str(tmp_path)])
+    client = TestClient(app_module.app)
+    fid = file_id(str(tmp_path), "d.txt")
+
+    assert client.get(f"/api/file/{fid}/cover").status_code == 415
 
 
 def test_progress_api(monkeypatch, tmp_path):
