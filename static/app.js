@@ -381,6 +381,11 @@ createApp({
         const info = await this.request("/api/device", {}, target.source);
         if (!info.features?.includes("delete"))
           throw Error(this.upgradeHint(info));
+        if (
+          this.player.file?.id === target.file.id &&
+          (this.player.source?.id || null) === (target.source?.id || null)
+        )
+          this.closePlayer();
         await this.request(
           "/api/file/" + target.file.id,
           {
@@ -393,11 +398,6 @@ createApp({
           },
           target.source,
         );
-        if (
-          this.player.file?.id === target.file.id &&
-          this.player.source === target.source
-        )
-          this.closePlayer();
         this.playQueue = this.playQueue.filter((f) => f.id !== target.file.id);
         this.deleteTarget = null;
         if (this.source === target.source) await this.load();

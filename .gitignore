@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 progress.db
+progress.db-*
 config.json
 .thumbnail_cache/
 android/.gradle/

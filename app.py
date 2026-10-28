@@ -19,12 +19,13 @@ from pydantic import BaseModel, Field
 from scanner import FileScanner
 from storage import get_progress, get_progresses, save_progress
 from discovery import DEVICE_ID, addresses, discovery
+from file_response import SharedFileResponse
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
 THUMBNAIL_DIR = BASE_DIR / ".thumbnail_cache"
 FILE_CHUNK_SIZE = 1024 * 1024
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 DEFAULT_CONFIG = {"dirs": []}
 
@@ -218,8 +219,10 @@ def delete_file(file_id: str, body: DeleteFileBody):
     try:
         # Unlink the advertised entry, not the resolved target of an in-root symlink.
         (Path(target.dir) / target.path).unlink()
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="源设备不允许删除该文件，请检查文件权限或是否正被占用")
+    except PermissionError as exc:
+        if getattr(exc, "winerror", None) in (32, 33):
+            raise HTTPException(status_code=409, detail="视频正被电脑上的其他程序占用，请关闭对应的播放器或迅雷下载任务后重试")
+        raise HTTPException(status_code=403, detail="电脑上的文件为只读或当前账户没有删除权限，请在电脑上检查文件属性和目录权限")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="文件已删除")
     except OSError:
@@ -235,7 +238,7 @@ def delete_file(file_id: str, body: DeleteFileBody):
 
 
 def _file_response(path: Path, **kwargs) -> FileResponse:
-    response = FileResponse(path, **kwargs)
+    response = SharedFileResponse(path, **kwargs)
     response.chunk_size = FILE_CHUNK_SIZE
     return response
 

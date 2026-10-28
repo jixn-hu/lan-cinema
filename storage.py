@@ -15,9 +15,15 @@ CREATE TABLE IF NOT EXISTS progress (
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(_SCHEMA)
-    return conn
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        # Readers must not block behind another device saving its playback time.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(_SCHEMA)
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def get_progress(file_id: str) -> float:
